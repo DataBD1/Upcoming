@@ -67,5 +67,6 @@ Until agents can reach Vercel and Supabase from the cloud (network allowlist, S5
 | Vercel project | **SK** | None (deploys happen through GitHub) |
 | Supabase project | **SK**, created through Vercel | None until the S5 allowlist |
 | `ADMIN_PHONES` | **SK** sets on Vercel | Read by the app only |
+| `ADMIN_SETUP_CODE` | **SK** sets on Vercel (required in production when `ADMIN_PHONES` is set) | Long random secret. A team member enters it in the "Admin setup code" box at sign-up or login to get admin rights; without it a listed number is a normal player |
 
 Every account stays in SK's name. Agents never hold passwords. Losing the GitHub connection stops deploys but not the running site.

@@ -71,6 +71,7 @@
       e_no_proposal: 'কোনো প্রস্তাব নেই', e_bad_template: 'ধরন বেছে নিন', e_bad_threshold: 'সীমা সংখ্যায় দিন', e_exists: 'এই বাজার আগেই খোলা হয়েছে', e_no_user: 'খেলোয়াড় পাওয়া যায়নি', e_unknown: 'কিছু একটা ভুল হয়েছে', e_bad_window: 'আপত্তির সময় ০–৭২ ঘণ্টা',
       footer: 'বিনামূল্যে খেলুন। কোনো টাকা নেই, কোনো পুরস্কার নেই। পয়েন্ট কেনা যায় না, ভাঙানো যায় না। শুধু ১৮+।', privacy: 'গোপনীয়তা নীতি',
       adult_box: 'আমার বয়স ১৮ বছর বা তার বেশি', consent_box: 'আমি গোপনীয়তা নীতি পড়েছি এবং আমার তথ্য ব্যবহারে সম্মতি দিচ্ছি',
+      admin_setup: 'অ্যাডমিন সেটআপ কোড (শুধু টিমের জন্য)', e_bad_setup: 'সেটআপ কোডটি সঠিক নয়',
       priv_short: 'আমরা শুধু আপনার নাম, মোবাইল নম্বর ও পাসওয়ার্ড (গোপন করে) রাখি, আর খেলার হিসাব। খেলা চালানো ও একজনের একটি অ্যাকাউন্ট নিশ্চিত করতে এগুলো লাগে। তথ্য থাকে Supabase (মুম্বাই, ভারত) ও Vercel-এ। সেটিংস থেকে যেকোনো সময় দেখা, ঠিক করা বা মুছে ফেলা যায়।',
       read_full: 'পুরো নীতি পড়ুন', account: 'আমার তথ্য', your_data: 'আপনার সম্পর্কে আমরা যা রাখি', joined: 'যোগ দিয়েছেন', consented: 'সম্মতি দিয়েছেন',
       save: 'সেভ করুন', saved: 'সেভ হয়েছে', new_phone: 'নতুন মোবাইল নম্বর', change_phone: 'নম্বর বদলান', pw_again: 'পাসওয়ার্ড আবার দিন',
@@ -139,6 +140,7 @@
       e_no_proposal: 'No proposal to retract', e_bad_template: 'Pick a template', e_bad_threshold: 'Threshold must be a number', e_exists: 'That market is already open', e_no_user: 'Player not found', e_unknown: 'Something went wrong', e_bad_window: 'Dispute window must be 0 to 72 hours',
       footer: "Free to play. No money, no prizes. Points can't be bought or cashed out. 18+ only.", privacy: 'Privacy notice',
       adult_box: 'I am 18 or older', consent_box: 'I have read the privacy notice and agree to my data being used as it describes',
+      admin_setup: 'Admin setup code (team only)', e_bad_setup: 'That setup code is not right',
       priv_short: 'We keep only your name, mobile number and password (scrambled), plus your game record. We need them to run the game and make sure each person has one account. Data is stored with Supabase (Mumbai, India) and Vercel. You can see, correct or delete it any time in settings.',
       read_full: 'Read the full notice', account: 'My data', your_data: 'What we hold about you', joined: 'Joined', consented: 'Consent given',
       save: 'Save', saved: 'Saved', new_phone: 'New mobile number', change_phone: 'Change number', pw_again: 'Enter your password again',
@@ -676,6 +678,7 @@
       (signup ? '<label for="name">' + t('name') + '<input id="name" autocomplete="nickname" maxlength="24" required></label>' : '') +
       '<label for="phone">' + t('phone') + '<input id="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="01XXXXXXXXX" required></label>' +
       '<label for="pin">' + t('pin') + '<input id="pin" type="password" minlength="6" maxlength="64" autocomplete="' + (signup ? 'new-password' : 'current-password') + '" required></label>' +
+      '<details class="small muted"><summary>' + t('admin_setup') + '</summary><label for="setup"><input id="setup" type="password" autocomplete="off" maxlength="128"></label></details>' +
       (signup ? '<div class="note small">' + t('priv_short') + ' <a href="#privacy">' + t('read_full') + '</a></div>' +
         '<label class="check" for="adult"><input id="adult" type="checkbox" required> <span>' + t('adult_box') + '</span></label>' +
         '<label class="check" for="consent"><input id="consent" type="checkbox" required> <span>' + t('consent_box') + '</span></label>' +
@@ -803,6 +806,7 @@
     if (ev.target.id !== 'auth') return;
     ev.preventDefault();
     var body = { mode: signup ? 'signup' : 'login', phone: $('#phone').value, pin: $('#pin').value };
+    if ($('#setup') && $('#setup').value) body.setup = $('#setup').value;
     if (signup) { body.name = $('#name').value; body.adult = $('#adult').checked; body.consent = $('#consent').checked; body.device = deviceId(); }
     api('auth', body).then(function (r) {
       token = r.token; sset('dp-token', token);

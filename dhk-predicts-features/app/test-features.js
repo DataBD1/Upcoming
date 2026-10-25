@@ -13,7 +13,7 @@ const signup = async (phone, name, pin) => (await call('auth', { mode: 'signup',
   assert.equal((await call('home', {}, adminB, 'GET'))[1].me.admin, true);
 
   // ---- admin inbox: admin count and due-soon flag
-  let [st, r] = await call('inbox', {}, adminB, 'GET'); assert.equal(st, 200); assert.equal(r.adminCount, 2);
+  let [st, r] = await call('inbox', {}, adminB, 'GET'); assert.equal(st, 200); assert.equal(r.adminCount, 1); // only one of the two listed numbers has an admin account yet
   const mk = (await call('home', {}, null, 'GET'))[1].markets.find(m => m.status === 'open');
   // propose a result: the dispute window is 24h or 48h, so it is not "soon" yet
   await call('propose', { id: mk.id, outcome: 'y', hours: 24, note: 'x' }, adminB);

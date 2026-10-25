@@ -13,10 +13,35 @@ const PRIVACY_VERSION = 'draft-1';
 const isProd = () => process.env.VERCEL_ENV === 'production' || process.env.NODE_ENV === 'production';
 function ADMINS() {
   const raw = (process.env.ADMIN_PHONES || '').split(',').map(x => x.trim()).filter(Boolean);
-  const list = raw.map(p => normPhone(p)).filter(Boolean);
-  if (isProd() && (!list.length || list.length !== raw.length)) throw new Error('ADMIN_PHONES must list valid phone numbers (E.164, e.g. +12025550123) in production.');
-  if (isProd() && list.length < 2 && !ADMINS.warned) { ADMINS.warned = true; console.warn('ADMIN_PHONES has only ' + list.length + ' number: set 2 or more before launch, or corrections cannot be approved.'); }
+  const all = raw.map(p => normPhone(p)).filter(Boolean);
+  if (isProd() && (!all.length || all.length !== raw.length)) throw new Error('ADMIN_PHONES must list valid phone numbers (E.164, e.g. +12025550123) in production.');
+  if (isProd() && !process.env.ADMIN_SETUP_CODE) throw new Error('ADMIN_SETUP_CODE must be set in production when ADMIN_PHONES is set: it is the secret an admin presents at sign-up or login to get admin rights.');
+  const list = [...new Set(all)]; // aliases of one number (01711.., +8801711..) count once
+  const now = Date.now();
+  if (isProd() && list.length < 2 && !(ADMINS.warnedAt > now - 36e5)) { ADMINS.warnedAt = now; console.warn('ADMIN_PHONES lists only ' + list.length + ' distinct admin number(s): set at least 2 before launch, or corrections cannot be approved. (Logged at most once an hour per instance.)'); }
   return list;
+}
+// Admin rights need the setup code (env ADMIN_SETUP_CODE). Unset outside production = old behaviour (number alone is enough), so local runs and tests work.
+function setupState(body) {
+  const want = process.env.ADMIN_SETUP_CODE, got = String((body && body.setup) || '');
+  if (!want) return { given: false, ok: !isProd() };
+  if (!got) return { given: false, ok: false };
+  const h = x => crypto.createHash('sha256').update(x).digest();
+  return { given: true, ok: crypto.timingSafeEqual(h(want), h(got)) };
+}
+// Admin = flag on the account AND the account's current number still in ADMIN_PHONES, checked on every request.
+function syncAdmin(s, uid) {
+  const u = uid && s.users && s.users[uid];
+  if (u && u.admin) {
+    const phone = Object.keys(s.auth || {}).find(p => s.auth[p].uid === uid);
+    if (!phone || !ADMINS().includes(phone)) delete u.admin;
+  }
+  return uid;
+}
+function adminCount(s) {
+  const ids = new Set();
+  for (const p of ADMINS()) { const r = s.auth && s.auth[p], u = r && s.users[r.uid]; if (u && u.admin && !u.deleted && !u.bot) ids.add(r.uid); }
+  return ids.size;
 }
 
 // A43: phones are stored in E.164 (+8801712345678, +12025550123). Bangladeshi local
@@ -62,8 +87,8 @@ function newSession(state, uid, now) {
 function sessUid(v, now) { return !v ? null : Array.isArray(v) ? (now - v[1] > SESSION_MS ? null : v[0]) : v; }
 const DUMMY_SALT = crypto.randomBytes(12).toString('hex'), DUMMY_HASH = crypto.scryptSync('x', DUMMY_SALT, 32).toString('hex');
 // A45: is sign-up closed for this IP country or phone? Numbers in ADMIN_PHONES (the team) are exempt.
-function signupBlocked(site, country, phone) {
-  if (!site || (phone && ADMINS().includes(phone))) return false;
+function signupBlocked(site, country, phone, teamOk) {
+  if (!site || (teamOk && phone && ADMINS().includes(phone))) return false; // exempt only with the setup code
   if (country && (site.blockedIpCountries || []).includes(String(country).toUpperCase())) return true;
   return !!phone && (site.blockedPhoneCodes || []).some(c => phone.startsWith('+' + c));
 }
@@ -76,14 +101,16 @@ function auth(state, body, now, country) {
   const rec = state.auth[phone];
   if (body.mode === 'signup') {
     if (rec) throw code('phone_taken');
-    if (signupBlocked(state.site, country, phone)) throw code('not_available');
+    const su = setupState(body);
+    if (su.given && !su.ok) { if (limited(state, '#setup', now)) throw code('slow_down'); throw code('bad_setup'); }
+    if (signupBlocked(state.site, country, phone, su.ok)) throw code('not_available');
     // A21 + A31: both boxes must be ticked by the player; the client never pre-ticks them.
     if (body.adult !== true) throw code('need_adult');
     if (body.consent !== true) throw code('need_consent');
     const uid = 'u' + crypto.randomBytes(6).toString('hex'), salt = crypto.randomBytes(12).toString('hex');
     state.auth[phone] = { uid, salt, hash: crypto.scryptSync(pin, salt, 32).toString('hex') };
     const extra = { adultAt: now, consentAt: now, consentVer: PRIVACY_VERSION };
-    if (ADMINS().includes(phone)) extra.admin = true;
+    if (ADMINS().includes(phone) && su.ok) extra.admin = true;
     Core.addUser(state, uid, body.name, now, extra);
     clearAttempts(state, phone);
     // A27 duplicate-account guard: the browser sends a random device id; 3+ accounts on one device are flagged to admins.
@@ -96,6 +123,10 @@ function auth(state, body, now, country) {
   const h = crypto.scryptSync(pin, rec ? rec.salt : DUMMY_SALT, 32).toString('hex');
   if (!rec || !crypto.timingSafeEqual(Buffer.from(h, 'hex'), Buffer.from(rec.hash, 'hex'))) throw code('wrong_login');
   clearAttempts(state, phone);
+  // Login-time grant: an existing player whose number is in ADMIN_PHONES becomes admin by presenting the setup code.
+  const su = setupState(body);
+  if (su.given && !su.ok) { if (limited(state, '#setup', now)) throw code('slow_down'); throw code('bad_setup'); }
+  if (su.given && su.ok && ADMINS().includes(phone) && state.users[rec.uid]) state.users[rec.uid].admin = true;
   return { token: newSession(state, rec.uid, now) };
 }
 
@@ -190,7 +221,7 @@ async function handleApi(store, { method, name, body, token, ua, country, ip }) 
         Core.migrate(s);
         try {
           if (name === 'usereset') return [200, useReset(s, body, now)];
-          const uid = (token && s.sessions && sessUid(s.sessions[tokHash(token)], now)) || null;
+          const uid = syncAdmin(s, (token && s.sessions && sessUid(s.sessions[tokHash(token)], now)) || null);
           return [200, issueReset(s, uid, body.phone, now)];
         } catch (e) { if (!e.code) throw e; return [e.code === 'forbidden' ? 403 : 400, { error: e.code }]; }
       });
@@ -211,7 +242,7 @@ async function handleApi(store, { method, name, body, token, ua, country, ip }) 
       if (token) await store.transact(s => { delete s.sessions[tokHash(token)]; });
       return [200, { ok: true }];
     }
-    const uidIn = s => (token && s.sessions && sessUid(s.sessions[tokHash(token)], now)) || null;
+    const uidIn = s => syncAdmin(s, (token && s.sessions && sessUid(s.sessions[tokHash(token)], now)) || null);
     if (name === 'account') {
       const s = Core.migrate(await store.read()), uid = uidIn(s);
       const out = Core.act(s, uid, 'account', body, now);
@@ -229,17 +260,17 @@ async function handleApi(store, { method, name, body, token, ua, country, ip }) 
           if (limited(s, phone, now)) throw code('slow_down');
           const h = crypto.scryptSync(String(body.pin || ''), rec.salt, 32).toString('hex');
           if (!crypto.timingSafeEqual(Buffer.from(h, 'hex'), Buffer.from(rec.hash, 'hex'))) throw code('wrong_pin');
-          delete s.attempts[phone];
+          clearAttempts(s, phone);
           if (name === 'chphone') {
             const np = normPhone(body.phone, s.site && s.site.signupCountries);
             if (!np) throw code('bad_phone');
             if (s.auth[np]) throw code('phone_taken');
             s.auth[np] = rec; delete s.auth[phone];
-            if (s.users[uid].admin && !ADMINS().includes(np)) delete s.users[uid].admin;
+            delete s.users[uid].admin; // the old number must not stay claimable; the new one needs the setup code at login
             return [200, { ok: true }];
           }
           delete s.auth[phone];
-          if (s.attempts) delete s.attempts[phone];
+          clearAttempts(s, phone);
           for (const k of Object.keys(s.sessions)) if (sessUid(s.sessions[k], now) === uid || (Array.isArray(s.sessions[k]) && s.sessions[k][0] === uid)) delete s.sessions[k];
           Core.deleteUser(s, uid, now);
           return [200, { ok: true }];
@@ -259,7 +290,7 @@ async function handleApi(store, { method, name, body, token, ua, country, ip }) 
     }
     const out = Core.act(s, uidIn(s), name, body, now);
     if (name === 'home') { out.signupOpen = !signupBlocked(out.site, country, null); out.otp = otpOn(); }
-    if (name === 'inbox') out.adminCount = ADMINS().length;
+    if (name === 'inbox') out.adminCount = adminCount(s);
     return [200, out];
   } catch (e) {
     if (!e.code) console.error(e);
