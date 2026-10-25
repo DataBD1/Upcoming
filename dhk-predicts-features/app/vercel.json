@@ -8,7 +8,7 @@
   "outputDirectory": "public",
   "rewrites": [
     {
-      "source": "/api/:path((?!backup$).*)",
+      "source": "/api/:path((?!(?:backup|sweep)$).*)",
       "destination": "/api/index"
     }
   ],
@@ -36,6 +36,10 @@
     {
       "path": "/api/backup",
       "schedule": "30 21 * * *"
+    },
+    {
+      "path": "/api/sweep",
+      "schedule": "50 21 * * *"
     }
   ]
 }

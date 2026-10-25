@@ -155,8 +155,8 @@ console.log('all engine tests passed; leaderboard top:', C.act(s, 'u1', 'leaders
   C.act(s, 'a', 'dispute', { id: 'usd-125', reason: 'rate was 124.9' }, now + 3600e3);
   assert.throws(() => C.act(s, 'adm', 'resolve', { id: 'usd-125' }, now + 2 * 3600e3), /window_open/);
   C.act(s, 'adm', 'retract', { id: 'usd-125' }, now + 2 * 3600e3);
-  C.act(s, 'adm', 'propose', { id: 'usd-125', outcome: 'n', hours: 0 }, now + 3 * 3600e3);
-  const p0 = s.users.a.pts; C.act(s, 'adm', 'resolve', { id: 'usd-125' }, now + 3 * 3600e3);
+  C.act(s, 'adm', 'propose', { id: 'usd-125', outcome: 'n', hours: 1 }, now + 3 * 3600e3);
+  const p0 = s.users.a.pts; C.act(s, 'adm', 'resolve', { id: 'usd-125' }, now + 4 * 3600e3);
   assert(s.users.a.pts > p0 && !s.users.a.debt, 'settles proposed outcome');
   assert.throws(() => C.act(s, 'adm', 'propose', { id: 'mrt1', outcome: '__proto__' }, now), /bad_outcome/);
   // lookup + audited adjust
