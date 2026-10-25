@@ -251,7 +251,7 @@ async function handleApi(store, { method, name, body, token, ua, country, ip }) 
       if (name === 'feedback') body.ua = ua;
       return [200, await store.transact(s => Core.act(s, uidIn(s), name, body, now))];
     }
-    const s = await store.read();
+    const s = await store.read({ events: name === 'metrics' });
     if (name === 'users' && body.q) {
       // Phone search: resolve the number to an account here, since core.js never sees phones.
       const ph = normPhone(body.q);

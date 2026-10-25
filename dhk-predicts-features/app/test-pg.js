@@ -7,7 +7,7 @@ const { Client } = require("pg");
   const pg = new EmbeddedPostgres({ databaseDir: fs.mkdtempSync(path.join(os.tmpdir(), "ra-")), user: "t", password: "t", port: 54331, persistent: false, onLog: () => {} });
   await pg.initialise(); await pg.start();
   const url = "postgres://t:t@localhost:54331/postgres";
-  process.env.POSTGRES_URL = url; process.env.ADMIN_PHONES = "01711000000";
+  process.env.PGSTORE_VERIFY = "1"; process.env.POSTGRES_URL = url; process.env.ADMIN_PHONES = "01711000000";
   try {
     // Two "serverless instances": separate module copies, separate pools.
     const fn1 = require("./api/index.js");
@@ -45,7 +45,7 @@ const { Client } = require("pg");
     const beforeFull = await loadFull(c, "rival-a");
     // The store writes rollback copies as full-state blobs; do the same here for the drill.
     await c.query("insert into app_state_history (key, version, data) values ('rival-a', $1, $2)", [beforeFull.version, JSON.stringify(beforeFull.state)]);
-    await c.query("update app_state set data = '{}'::jsonb where key='rival-a'");
+    await c.query("update app_state set data = '{}'::jsonb, version = version + 1 where key='rival-a'"); // manual edits must bump version, like the documented restore SQL
     [st] = await call(3200, "home", {}, tokens[3], "GET"); assert.notEqual(st, 200, "damaged state should break");
     await c.query(`update app_state s set data = h.data, version = s.version + 1 from
       (select data from app_state_history where key='rival-a' order by id desc limit 1) h where s.key='rival-a'`);
@@ -59,7 +59,7 @@ const { Client } = require("pg");
 
     // ---- Sharding: big maps live in app_shards, and a write touches only the rows that changed.
     const size = (await c.query("select pg_column_size(data) b, length(data::text) t from app_state where key='rival-a'")).rows[0];
-    const shardN = +(await c.query("select count(*) n from app_shards where key='rival-a'")).rows[0].n;
+    const shardN = +(await c.query("select count(*) n from app_shards where key='rival-a' and not deleted")).rows[0].n;
     assert(shardN > 40, "sessions, positions and logs are in app_shards (" + shardN + ")");
     for (const coll of ["sessions", "pos", "log"]) assert(!(coll in main2), coll + " is not in the main row");
     const xmins = async () => Object.fromEntries((await c.query("select coll||'/'||k id, xmin::text x from app_shards where key='rival-a'")).rows.map((r) => [r.id, r.x]));
@@ -68,14 +68,15 @@ const { Client } = require("pg");
     [st, r] = await call(3200, "buy", { id: open.id, side: "y", amount: 20 }, tokens[7]); assert.equal(st, 200, JSON.stringify(r));
     const x1 = await xmins(), changed = Object.keys(x1).filter((k) => x0[k] !== x1[k]);
     assert(changed.length >= 1 && changed.length <= 3, "one buy rewrites only that player's rows, got " + JSON.stringify(changed));
-    assert(changed.every((k) => /^(pos|log)\//.test(k)), "only position/log rows changed: " + JSON.stringify(changed));
+    assert(changed.every((k) => /^(pos|log|users)\//.test(k)), "only that player's rows changed: " + JSON.stringify(changed));
     // Deleting an account removes its session shard (its trades stay anonymous).
     [st, r] = await call(3200, "me", {}, tokens[9], "GET"); const gone = r.me.id;
-    const sessBefore = +(await c.query("select count(*) n from app_shards where key='rival-a' and coll='sessions'")).rows[0].n;
+    const sessBefore = +(await c.query("select count(*) n from app_shards where key='rival-a' and coll='sessions' and not deleted")).rows[0].n;
     [st, r] = await call(3200, "delete", { pin: "secret12" }, tokens[9]); assert.equal(st, 200, JSON.stringify(r));
-    const sessAfter = +(await c.query("select count(*) n from app_shards where key='rival-a' and coll='sessions'")).rows[0].n;
+    const sessAfter = +(await c.query("select count(*) n from app_shards where key='rival-a' and coll='sessions' and not deleted")).rows[0].n;
     assert.equal(sessAfter, sessBefore - 1, "the deleted account's session row is gone");
     assert.equal((await call(3200, "home", {}, tokens[9], "GET"))[1].me, null, "and its token no longer works");
+    assert.equal((await call(3201, "home", {}, tokens[9], "GET"))[1].me, null, "on the other server copy too (the delete reaches its cache)");
     console.log("state size after 21 users / 100 trades (main row only):", size, "| shard rows:", shardN);
 
     // ---- Backup reads main row + shards in one snapshot and gives the old single-blob shape.
@@ -93,8 +94,14 @@ const { Client } = require("pg");
     assert.equal(lm.__v, 2); assert(!lm.pos && !lm.sessions && !lm.log && !lm.resets); assert.deepEqual(lm.custom, { keep: true });
     const back = await ls.read();
     assert.equal(back.pos.u1.m.y, 2); assert.deepEqual(back.sessions, legacy.sessions); assert.deepEqual(back.resets, { r1: { uid: "u1", exp: 5 } });
-    await assert.rejects(ls.transact((s) => { s.pos.u1.m.y = 99; throw new Error("boom"); }), /boom/);
+    await assert.rejects(ls.transact((s) => { s.pos.u1.m.y = 99; s.users.u1.name = "X"; s.custom.keep = false; delete s.sessions.h1; throw new Error("boom"); }), /boom/);
+    { const again = await ls.read(); assert.equal(again.users.u1.name, "L", "refused change: shard rolled back in memory"); assert.deepEqual(again.custom, { keep: true }, "and the main row too"); assert.deepEqual(again.sessions, legacy.sessions, "and a deleted key is back"); }
     assert.equal((await ls.read()).pos.u1.m.y, 2, "a failed change saves nothing, shards included");
+    await ls.transact((s) => { s.weekstart = {}; for (let i = 0; i < 50; i++) s.weekstart["p" + i] = i; });
+    assert.equal(Object.keys((await ls.read()).weekstart).length, 50, "replacing a whole map in one request is saved");
+    await ls.transact((s) => { s.weekstart = { only: 1 }; });
+    assert.deepEqual((await ls.read()).weekstart, { only: 1 }, "and the old keys are gone");
+    assert.equal(+(await c.query("select count(*) n from app_shards where key='legacy' and coll='weekstart' and not deleted")).rows[0].n, 1, "in the database too");
     await ls.transact((s) => { delete s.sessions.h1; });
     assert.deepEqual((await ls.read()).sessions, {}, "removed keys are removed");
     await ls.end();

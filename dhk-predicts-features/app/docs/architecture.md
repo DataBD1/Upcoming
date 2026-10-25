@@ -58,8 +58,8 @@ Points are a number in this row and nothing else: there is no code path to buy, 
 
 | Limit | Where it bites | Next step |
 |---|---|---|
-| One state row, rewritten on every trade | **Done in `lib/pgstore.js`:** sessions, positions, trade logs, login attempts, reset codes and device flags now live one row each in `app_shards`; a write rewrites only the rows that changed (a buy touches that player's position and log rows). What stays in the main row: users, markets, events, audit, feedback (29 KB at 21 users and 100 trades, down from 44 KB). Reads still load every shard. | Past a few thousand players: load only the shards a request needs (needs a `core.js` change), and shard `events`/`audit`/`feedback` too. |
-| One row lock | Every write queues behind the last one, a few ms each. | Same as above. |
+| One state row, rewritten on every trade | **Done** (`lib/pgstore.js`, measured in `docs/scaling.md`): big maps are one row per key, each server copy caches the state and fetches only changed rows, and a write saves only what it touched. At 10,000 players: reads 1 ms, buys 8 ms, 200 requests/s with a slowest p95 of 182 ms. | See the known limits in `docs/scaling.md` (password hashing on the main thread, leaderboard ranking, feedback and audit in the main row). |
+| One row lock | Every write queues behind the last one, about 6 ms each, so roughly 150 writes a second. | Lock per market if it ever matters. |
 | Supabase free tier | Pauses after 7 days with no traffic; 500 MB. No downloadable backups. | Daily traffic keeps it awake. Nightly export (operations.md) covers backups. Pro ($25/mo) when revenue starts. |
 | Vercel Hobby | Non-commercial use only. | Pro ($20/mo) when the first sponsor deal is signed. |
 | No SMS OTP | Anyone can sign up with any number. | B9 before public launch (rival-a/README.md has the design). |

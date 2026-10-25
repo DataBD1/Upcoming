@@ -45,13 +45,16 @@
     // transaction. Reads never write; they fall back to START_POINTS for anyone missing.
     function rollWeek(s, now) {
       var id = weekId(s, now);
+      // Start-of-week scores live in s.weekstart (a top-level map, so the Postgres store can keep one row per player).
+      // Older states kept them in s.week.start; move them over.
+      if (s.week && s.week.start) { s.weekstart = s.week.start; delete s.week.start; }
       if (!s.week || s.week.id !== id) {
-        s.week = { id: id, start: {} };
-        Object.keys(s.users).forEach(function (u) { if (live(s, u)) s.week.start[u] = Math.round(worth(s, u)); });
+        s.week = { id: id }; s.weekstart = {};
+        Object.keys(s.users).forEach(function (u) { if (live(s, u)) s.weekstart[u] = Math.round(worth(s, u)); });
       }
     }
     function gain(s, uid) {
-      var base = s.week && s.week.start && has(s.week.start, uid) ? s.week.start[uid] : Core.START_POINTS;
+      var base = s.weekstart && has(s.weekstart, uid) ? s.weekstart[uid] : Core.START_POINTS;
       return Math.round(worth(s, uid) - base);
     }
     function row(s, uid, me) {
@@ -159,7 +162,7 @@
         g.members = g.members.filter(function (m) { return m !== uid; });
         if (!g.members.length) delete groups(s)[c]; else if (g.owner === uid) g.owner = g.members[0];
       });
-      if (s.week && s.week.start) delete s.week.start[uid];
+      if (s.weekstart) delete s.weekstart[uid];
     });
     return { weekId: weekId };
   }

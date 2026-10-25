@@ -17,7 +17,7 @@ Sign up with an admin number to get the admin tools. `npm install` is only neede
 | Audit log CSV | Admin, Audit log, "Download audit log CSV" | `core.js`, `public/app.js` |
 | Due-soon tag and admin-count warning | Admin inbox: tag on proposals with under 6h of dispute window; warning when fewer than 2 admin numbers (production) | `core.js`, `lib/handler.js`, `public/app.js` |
 
-Tests for all of these: `test-features.js`. Storage: on Postgres the big maps are sharded into `app_shards` (`lib/pgstore.js`; test with `npm install` then `npm run test:pg`, which needs a non-root user because Postgres refuses to start as root). Real SMS: set `SMS_PROVIDER=webhook` and `SMS_WEBHOOK_URL`; see "Phone OTP" in the app README below. Source of truth for ongoing work: DataBD1/DHK-Predicts.
+Tests for all of these: `test-features.js`. Scaling: `docs/scaling.md` has the 10,000-player test results (`bench/soak.js`, `bench/load.js`). Storage: on Postgres the big maps are sharded into `app_shards` (`lib/pgstore.js`; test with `npm install` then `npm run test:pg`, which needs a non-root user because Postgres refuses to start as root). Real SMS: set `SMS_PROVIDER=webhook` and `SMS_WEBHOOK_URL`; see "Phone OTP" in the app README below. Source of truth for ongoing work: DataBD1/DHK-Predicts.
 
 ---
 

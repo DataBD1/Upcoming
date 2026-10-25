@@ -32,7 +32,7 @@ Rules: never merge on red CI; never skip a test to get green; one change per pul
         and saved_at <= '<time before the problem>' order by saved_at desc limit 1) h
   where s.key = 'rival-a';
   ```
-  Tested on 15 Oct against Postgres 18. Trades after that copy are lost, so prefer a correcting admin action (re-settle, clawback) when the problem is one market.
+  The `version = s.version + 1` matters: server copies keep the state in memory and notice a change by its version (and reload fully every 10 minutes regardless), so a manual edit that leaves the version alone can take up to 10 minutes to show. Tested on 15 Oct against Postgres 18. Trades after that copy are lost, so prefer a correcting admin action (re-settle, clawback) when the problem is one market.
 
 ## 4. Backups
 

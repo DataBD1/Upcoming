@@ -78,7 +78,7 @@ assert.ok(!(solo.code in s.groups));
 // account deletion removes the player from groups and the week baseline
 Core.deleteUser(s, B, now);
 assert.ok(!s.groups[g.code].members.includes(B));
-assert.ok(!(B in s.week.start));
+assert.ok(!(B in s.weekstart));
 
 // state stays plain JSON (the pgstore / filestore round trip)
 assert.deepStrictEqual(JSON.parse(JSON.stringify(s.groups)), s.groups);

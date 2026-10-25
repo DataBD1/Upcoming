@@ -30,7 +30,7 @@ module.exports = async (req, res) => {
     let full;
     try {
       await c.query('begin isolation level repeatable read read only');
-      full = await loadFull(c, 'rival-a', false);
+      full = await loadFull(c, 'rival-a', false, { events: true });
       await c.query('commit');
     } catch (e) { await c.query('rollback').catch(() => {}); throw e; } finally { c.release(); }
     if (!full) throw new Error('no state row yet');
