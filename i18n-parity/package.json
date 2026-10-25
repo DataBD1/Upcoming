@@ -4,6 +4,6 @@
   "private": true,
   "main": "index.js",
   "bin": { "i18n-parity": "index.js" },
-  "scripts": { "test": "node test.js" },
+  "scripts": { "test": "node test.js && node test-mutants.js" },
   "engines": { "node": ">=18" }
 }
