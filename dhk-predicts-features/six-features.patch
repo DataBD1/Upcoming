@@ -1,0 +1,567 @@
+diff --git a/core.js b/core.js
+index 6f79a45..3a4ba96 100644
+--- a/core.js
++++ b/core.js
+@@ -412,11 +412,17 @@
+         pending: m.pending ? { to: m.pending.to, by: s.users[m.pending.by] ? s.users[m.pending.by].name : '—', mine: m.pending.by === uid } : null }); });
+     });
+     var proposed = s.markets.filter(function (m) { return m.status === 'proposed'; }).map(function (m) {
+-      return { id: m.id, q: m.q, out: m.proposal.out, until: m.proposal.until, disputes: (m.disputes || []).length, mine: m.proposal.by === uid };
++      return { id: m.id, q: m.q, out: m.proposal.out, until: m.proposal.until, disputes: (m.disputes || []).length, mine: m.proposal.by === uid, soon: m.proposal.until - now <= 6 * 36e5 };
+     });
+     return { me: publicUser(s, uid, now), proposed: proposed, feedback: (s.feedback || []).slice(-100).reverse(), disputes: disputes.reverse(), audit: (s.audit || []).slice(-50).reverse() };
+   };
+ 
++  // The whole audit log (at most 5000 entries) for the admin CSV export.
++  READS.auditall = function (s, uid) {
++    if (!uid || !s.users[uid].admin) throw err('forbidden');
++    return { audit: (s.audit || []).slice().reverse() };
++  };
++
+   var WRITES = {
+     buy: function (s, uid, a, now) {
+       var m = findMarket(s, a.id), u = s.users[uid];
+@@ -594,6 +600,15 @@
+       if (a.blockedPhone) s.site.blockedPhoneCodes = codes(a.blockedPhone, /^\d{1,3}$/);
+       return { ok: true, site: s.site };
+     },
++    // Sponsor line shown under the question list. Empty text clears it. https links only.
++    sponsor: function (s, uid, a) {
++      if (!s.users[uid].admin) throw err('forbidden');
++      var en = String(a.en || '').trim().slice(0, 80), bn = String(a.bn || '').trim().slice(0, 80) || en, url = String(a.url || '').trim().slice(0, 200);
++      if (!en) { delete s.site.sponsor; return { ok: true, site: s.site }; }
++      if (url && !/^https:\/\/[^\s]+$/.test(url)) throw err('bad_link');
++      s.site.sponsor = { en: en, bn: bn, url: url };
++      return { ok: true, site: s.site };
++    },
+     // Open a daily market from a template, or repeat an existing template market for a new
+     // date (backlog 11). Threshold x is required where the template has one.
+     open: function (s, uid, a, now) {
+@@ -730,7 +745,7 @@
+   }
+ 
+   // Every admin write is logged with who, when, and what.
+-  var ADMIN_ACTIONS = { adjust: 1, propose: 1, retract: 1, resolve: 1, review: 1, confirm: 1, open: 1, fbstatus: 1, create: 1, city: 1, signup: 1 };
++  var ADMIN_ACTIONS = { adjust: 1, propose: 1, retract: 1, resolve: 1, review: 1, confirm: 1, open: 1, fbstatus: 1, create: 1, city: 1, signup: 1, sponsor: 1 };
+   function audit(s, uid, name, a, now) {
+     s.audit = s.audit || [];
+     s.audit.push({ at: now, by: uid, name: s.users[uid].name, action: name, args: JSON.parse(JSON.stringify(a)) });
+@@ -765,7 +780,7 @@
+ 
+   var Core = {
+     seed: seed, act: act, migrate: migrate, localDay: localDay, track: track, deleteUser: deleteUser, addUser: addUser, isWrite: function (n) { return !!own(WRITES, n); },
+-    extend: extend, beforeWrite: function (f) { BEFORE.push(f); }, afterWrite: function (n, f) { (AFTER[n] = AFTER[n] || []).push(f); },
++    audit: audit, extend: extend, beforeWrite: function (f) { BEFORE.push(f); }, afterWrite: function (n, f) { (AFTER[n] = AFTER[n] || []).push(f); },
+     onDelete: function (f) { ONDELETE.push(f); }, err: err, worth: worth, siteDay: siteDay,
+     sharesFor: sharesFor, proceedsFor: proceedsFor, priceYes: priceYes, START_POINTS: START_POINTS, DAILY_BONUS: DAILY_BONUS
+   };
+diff --git a/lib/handler.js b/lib/handler.js
+index 1f1d05a..9df42c4 100644
+--- a/lib/handler.js
++++ b/lib/handler.js
+@@ -3,6 +3,7 @@
+ 'use strict';
+ const crypto = require('crypto');
+ const Core = require('../core.js');
++const Sms = require('./sms.js');
+ require('../social.js').install(Core); // Rival B port: groups, leagues, streaks
+ 
+ // Version of the privacy notice a player agreed to (A31). Bump when the lawyer's edits land.
+@@ -14,6 +15,7 @@ function ADMINS() {
+   const raw = (process.env.ADMIN_PHONES || '').split(',').map(x => x.trim()).filter(Boolean);
+   const list = raw.map(p => normPhone(p)).filter(Boolean);
+   if (isProd() && (!list.length || list.length !== raw.length)) throw new Error('ADMIN_PHONES must list valid phone numbers (E.164, e.g. +12025550123) in production.');
++  if (isProd() && list.length < 2 && !ADMINS.warned) { ADMINS.warned = true; console.warn('ADMIN_PHONES has only ' + list.length + ' number: set 2 or more before launch, or corrections cannot be approved.'); }
+   return list;
+ }
+ 
+@@ -97,9 +99,83 @@ function auth(state, body, now, country) {
+   return { token: newSession(state, rec.uid, now) };
+ }
+ 
++
++// ---- Admin password reset -------------------------------------------------------
++// An admin issues a one-time code (valid 1 hour) for a player who forgot their password and
++// passes it on by hand. The player enters it with a new password on the login screen. Only a
++// hash of the code is stored, the action is audited, and all of the player's sessions end.
++const RESET_MS = 36e5;
++function issueReset(s, adminUid, phoneIn, now) {
++  if (!adminUid || !s.users[adminUid] || !s.users[adminUid].admin) throw code('forbidden');
++  const phone = normPhone(phoneIn), rec = phone && s.auth && s.auth[phone];
++  if (!rec) throw code('no_account');
++  s.resets = s.resets || {};
++  for (const k of Object.keys(s.resets)) if (s.resets[k].exp < now) delete s.resets[k];
++  for (const k of Object.keys(s.resets)) if (s.resets[k].uid === rec.uid) delete s.resets[k]; // one live code per player
++  const token = crypto.randomBytes(9).toString('base64url');
++  s.resets[tokHash('reset:' + token)] = { uid: rec.uid, exp: now + RESET_MS };
++  Core.audit(s, adminUid, 'resetpw', { user: rec.uid }, now);
++  return { code: token, minutes: RESET_MS / 6e4 };
++}
++function useReset(s, body, now) {
++  s.auth = s.auth || {}; s.sessions = s.sessions || {}; s.resets = s.resets || {};
++  const phone = normPhone(body.phone), pin = String(body.pin || '');
++  if (!phone) throw code('bad_phone');
++  if (pin.length < 6 || pin.length > 64) throw code('bad_pin');
++  if (limited(s, phone, now)) throw code('slow_down');
++  const rec = s.auth[phone], k = tokHash('reset:' + String(body.code || '').trim()), r = s.resets[k];
++  if (!rec || !r || r.exp < now || r.uid !== rec.uid) throw code('bad_reset');
++  delete s.resets[k];
++  rec.salt = crypto.randomBytes(12).toString('hex');
++  rec.hash = crypto.scryptSync(pin, rec.salt, 32).toString('hex');
++  for (const t of Object.keys(s.sessions)) { const v = s.sessions[t]; if ((Array.isArray(v) ? v[0] : v) === rec.uid) delete s.sessions[t]; }
++  clearAttempts(s, phone);
++  return { token: newSession(s, rec.uid, now) };
++}
++
++// ---- Phone OTP scaffold (B9) ----------------------------------------------------
++// Off unless OTP_ENABLED=1 and an SMS provider is configured (lib/sms.js). A code is 6 digits,
++// stored hashed, valid 5 minutes, 5 tries. Limits: 3 sends per number per hour, 10 per IP per hour,
++// and a daily cap on total sends (OTP_DAILY_CAP, default 200) so a flood cannot run up the SMS bill.
++// Verifying signs in an existing account; it does not create one (sign-up still uses a password).
++const OTP_MS = 5 * 60e3, HOUR = 36e5;
++const otpOn = () => process.env.OTP_ENABLED === '1' && Sms.available();
++function otpPrep(s, phone, ip, now) {
++  if (!otpOn()) throw code('otp_unavailable');
++  s.otp = s.otp || { codes: {}, sends: {}, day: '', n: 0 };
++  const o = s.otp;
++  for (const k of Object.keys(o.codes)) if (o.codes[k].exp < now) delete o.codes[k];
++  for (const k of Object.keys(o.sends)) { o.sends[k] = o.sends[k].filter(t => now - t < HOUR); if (!o.sends[k].length) delete o.sends[k]; }
++  return o;
++}
++function otpSendCheck(s, phone, ip, now) {
++  const o = otpPrep(s, phone, ip, now);
++  if (!s.auth || !s.auth[phone]) return { skip: true }; // same reply for unknown numbers, nothing is sent
++  const pk = tokHash('otp:' + phone).slice(0, 24), ik = tokHash('ip:' + (ip || '?')).slice(0, 24);
++  const day = new Date(now).toISOString().slice(0, 10);
++  if (o.day !== day) { o.day = day; o.n = 0; }
++  if ((o.sends[pk] || []).length >= 3 || (o.sends[ik] || []).length >= 10 || o.n >= (Number(process.env.OTP_DAILY_CAP) || 200)) throw code('slow_down');
++  const c = String(crypto.randomInt(0, 1e6)).padStart(6, '0');
++  (o.sends[pk] = o.sends[pk] || []).push(now); (o.sends[ik] = o.sends[ik] || []).push(now); o.n++;
++  o.codes[pk] = { h: tokHash('otpcode:' + phone + ':' + c), exp: now + OTP_MS, tries: 0 };
++  return { code: c };
++}
++function otpVerify(s, body, now) {
++  s.auth = s.auth || {}; s.sessions = s.sessions || {};
++  const phone = normPhone(body.phone);
++  if (!phone) throw code('bad_phone');
++  const o = otpPrep(s, phone, null, now), pk = tokHash('otp:' + phone).slice(0, 24), r = o.codes[pk], rec = s.auth[phone];
++  if (!r || !rec) throw code('bad_otp');
++  if (++r.tries > 5) { delete o.codes[pk]; throw code('bad_otp'); }
++  const h = tokHash('otpcode:' + phone + ':' + String(body.code || '').trim());
++  if (!crypto.timingSafeEqual(Buffer.from(h, 'hex'), Buffer.from(r.h, 'hex'))) throw code('bad_otp');
++  delete o.codes[pk];
++  return { token: newSession(s, rec.uid, now) };
++}
++
+ // Returns [status, body]. A failed login attempt still counts toward the limit,
+ // so auth errors are returned from inside the transaction instead of thrown.
+-async function handleApi(store, { method, name, body, token, ua, country }) {
++async function handleApi(store, { method, name, body, token, ua, country, ip }) {
+   const now = Date.now();
+   try {
+     if (!/^[a-z]{2,20}$/.test(name)) throw code('unknown'); // action names are plain lowercase words
+@@ -108,6 +184,29 @@ async function handleApi(store, { method, name, body, token, ua, country }) {
+       const r = await store.transact(s => { Core.migrate(s); try { return [200, auth(s, body, now, country)]; } catch (e) { if (!e.code) throw e; return [400, { error: e.code }]; } });
+       return r;
+     }
++    if (name === 'resetpw' || name === 'usereset') {
++      if (method !== 'POST') throw code('use_post');
++      return await store.transact(s => {
++        Core.migrate(s);
++        try {
++          if (name === 'usereset') return [200, useReset(s, body, now)];
++          const uid = (token && s.sessions && sessUid(s.sessions[tokHash(token)], now)) || null;
++          return [200, issueReset(s, uid, body.phone, now)];
++        } catch (e) { if (!e.code) throw e; return [e.code === 'forbidden' ? 403 : 400, { error: e.code }]; }
++      });
++    }
++    if (name === 'otpsend') {
++      if (method !== 'POST') throw code('use_post');
++      const phone = normPhone(body.phone); if (!phone) throw code('bad_phone');
++      let sendCode = null;
++      const r = await store.transact(s => { Core.migrate(s); try { const x = otpSendCheck(s, phone, ip, now); sendCode = x.code || null; return [200, { ok: true }]; } catch (e) { if (!e.code) throw e; return [400, { error: e.code }]; } });
++      if (sendCode) { try { await Sms.send(phone, 'Your code: ' + sendCode + ' (valid 5 minutes)'); } catch (e) { return [400, { error: e.code || 'otp_send_failed' }]; } }
++      return r;
++    }
++    if (name === 'otpverify') {
++      if (method !== 'POST') throw code('use_post');
++      return await store.transact(s => { Core.migrate(s); try { return [200, otpVerify(s, body, now)]; } catch (e) { if (!e.code) throw e; return [400, { error: e.code }]; } });
++    }
+     if (name === 'logout') {
+       if (token) await store.transact(s => { delete s.sessions[tokHash(token)]; });
+       return [200, { ok: true }];
+@@ -159,7 +258,8 @@ async function handleApi(store, { method, name, body, token, ua, country }) {
+       if (ph) body = { uid: s.auth && s.auth[ph] ? s.auth[ph].uid : '__none__' };
+     }
+     const out = Core.act(s, uidIn(s), name, body, now);
+-    if (name === 'home') out.signupOpen = !signupBlocked(out.site, country, null);
++    if (name === 'home') { out.signupOpen = !signupBlocked(out.site, country, null); out.otp = otpOn(); }
++    if (name === 'inbox') out.adminCount = ADMINS().length;
+     return [200, out];
+   } catch (e) {
+     if (!e.code) console.error(e);
+@@ -185,7 +285,8 @@ async function serveApi(store, req, res) {
+   const [status, out] = await handleApi(store, {
+     method: req.method, name: url.pathname.replace(/^\/api\//, ''), body,
+     token: (req.headers.authorization || '').replace(/^Bearer /, ''), ua: req.headers['user-agent'],
+-    country: req.headers['x-vercel-ip-country'] || null // set by Vercel; absent locally
++    country: req.headers['x-vercel-ip-country'] || null, // set by Vercel; absent locally
++    ip: String(req.headers['x-forwarded-for'] || (req.socket && req.socket.remoteAddress) || '').split(',')[0].trim()
+   });
+   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+   res.end(JSON.stringify(out));
+diff --git a/lib/sms.js b/lib/sms.js
+new file mode 100644
+index 0000000..88f83f6
+--- /dev/null
++++ b/lib/sms.js
+@@ -0,0 +1,26 @@
++// SMS sending for the OTP scaffold (B9). Pick a provider with SMS_PROVIDER:
++//   console  prints the message to the server log (local testing only; refused in production)
++//   webhook  POSTs {to, text} as JSON to SMS_WEBHOOK_URL (a local gateway or a small relay to one);
++//            SMS_WEBHOOK_TOKEN, if set, is sent as a Bearer token
++// Anything else, or nothing, means OTP is not available.
++'use strict';
++const isProd = () => process.env.VERCEL_ENV === 'production' || process.env.NODE_ENV === 'production';
++
++function available() {
++  const p = process.env.SMS_PROVIDER;
++  if (p === 'console') return !isProd();
++  if (p === 'webhook') return /^https:\/\//.test(process.env.SMS_WEBHOOK_URL || '');
++  return false;
++}
++async function send(to, text) {
++  const p = process.env.SMS_PROVIDER;
++  if (!available()) throw Object.assign(new Error('otp_unavailable'), { code: 'otp_unavailable' });
++  if (p === 'console') { console.log('[sms:console] to ' + to + ': ' + text); return; }
++  const r = await fetch(process.env.SMS_WEBHOOK_URL, {
++    method: 'POST',
++    headers: Object.assign({ 'Content-Type': 'application/json' }, process.env.SMS_WEBHOOK_TOKEN ? { Authorization: 'Bearer ' + process.env.SMS_WEBHOOK_TOKEN } : {}),
++    body: JSON.stringify({ to, text }), signal: AbortSignal.timeout(8000)
++  });
++  if (!r.ok) throw Object.assign(new Error('otp_send_failed'), { code: 'otp_send_failed' });
++}
++module.exports = { available, send };
+diff --git a/package.json b/package.json
+index 91ea233..77517d6 100644
+--- a/package.json
++++ b/package.json
+@@ -6,7 +6,7 @@
+   },
+   "scripts": {
+     "start": "node server.js",
+-    "test": "node test.js && node test-api.js && node test-disputes.js && node test-resolution.js && node test-security.js && node test-social.js && node test-retention.js && node test-pg.js",
++    "test": "node test.js && node test-api.js && node test-disputes.js && node test-resolution.js && node test-security.js && node test-social.js && node test-retention.js && node test-features.js && node test-pg.js",
+     "preview": "node build-preview.js"
+   },
+   "dependencies": {
+diff --git a/public/app.js b/public/app.js
+index 524484e..5e62665 100644
+--- a/public/app.js
++++ b/public/app.js
+@@ -51,6 +51,12 @@
+       reviewed_kept: 'আপত্তি দেখা হয়েছে, ফলাফল ঠিক আছে', reviewed_changed: 'আপত্তির পর ফলাফল বদলেছে: {a} থেকে {b}। সবার পয়েন্ট আবার হিসাব হয়েছে।',
+       help: 'মতামত', fb_title: 'সমস্যা বা মতামত জানান', fb_ph: 'কী হয়েছে, কোন পাতায়?', fb_sent: 'ধন্যবাদ, আমরা পেয়েছি', close: 'বন্ধ',
+       new_market: 'নতুন বাজার', q_en: 'প্রশ্ন (ইংরেজি)', q_bn: 'প্রশ্ন (বাংলা)', src_en: 'উৎস (ইংরেজি)', src_bn: 'উৎস (বাংলা)', closes_on: 'শেষ তারিখ', start_p: 'শুরুর সম্ভাবনা %', category: 'বিভাগ', create: 'বাজার খুলুন', created: 'বাজার খোলা হয়েছে', audit: 'অডিট লগ',
++      streak_now: 'টানা {n} দিন', streak_best: 'সেরা: {n} দিন', streak_none: 'আজকের ১০০ পয়েন্ট নিলে ধারা শুরু হবে',
++      soon: 'শীঘ্রই শেষ', admin_one: 'মাত্র {n}টি অ্যাডমিন নম্বর দেওয়া আছে। ADMIN_PHONES-এ দ্বিতীয় নম্বর যোগ করুন, না হলে সংশোধন অনুমোদন করা যাবে না।', audit_csv: 'অডিট লগ CSV নামান',
++      reset_title: 'খেলোয়াড়ের পাসওয়ার্ড রিসেট', reset_phone: 'খেলোয়াড়ের নম্বর', reset_make: 'কোড বানান', reset_code: 'এই কোডটি খেলোয়াড়কে দিন। একবারই কাজ করবে, {m} মিনিট: {c}',
++      forgot: 'পাসওয়ার্ড ভুলে গেছেন?', reset_have: 'রিসেট কোড', reset_new: 'নতুন পাসওয়ার্ড', reset_do: 'নতুন পাসওয়ার্ড দিন', back_login: 'লগইনে ফিরুন',
++      sp_title: 'স্পনসর লাইন', sp_en: 'লেখা (ইংরেজি)', sp_bn: 'লেখা (বাংলা)', sp_url: 'লিংক (https://...)', sp_save: 'সংরক্ষণ', sp_tag: 'স্পনসর',
++      e_bad_link: 'লিংক https:// দিয়ে শুরু হতে হবে', e_bad_reset: 'কোডটি ভুল বা মেয়াদ শেষ', e_forbidden: 'অনুমতি নেই', e_bad_otp: 'কোড ভুল বা মেয়াদ শেষ', e_otp_unavailable: 'এখন কোড পাঠানো যাচ্ছে না',
+       e_bad_date: 'ভবিষ্যতের একটি তারিখ দিন', e_need_source: 'নিষ্পত্তির উৎস দিন',
+       shortfall: 'বাকি', notice: 'সংশোধন: "{q}" এর ফলাফল {a} থেকে {b} করা হয়েছে। {p} পয়েন্ট {dir}।', taken: 'ফেরত নেওয়া হয়েছে', given: 'যোগ হয়েছে', ok: 'ঠিক আছে',
+       debt_line: 'আপনার {d} পয়েন্ট বাকি আছে। নতুন জেতা পয়েন্ট আর প্রতিদিনের বোনাসের অর্ধেক দিয়ে এটা শোধ হবে। প্রতিদিন অন্তত ৫০ পয়েন্ট খেলতে পারবেন।',
+@@ -113,6 +119,12 @@
+       reviewed_kept: 'Disputes reviewed; the result stands', reviewed_changed: 'After review the result changed from {a} to {b}. Everyone\'s points were recalculated.',
+       help: 'Help', fb_title: 'Report a problem or send feedback', fb_ph: 'What happened, and on which screen?', fb_sent: 'Thanks, we got it', close: 'Close',
+       new_market: 'New market', q_en: 'Question (English)', q_bn: 'Question (Bangla)', src_en: 'Source (English)', src_bn: 'Source (Bangla)', closes_on: 'Closes on', start_p: 'Starting chance %', category: 'Category', create: 'Open market', created: 'Market opened', audit: 'Audit log',
++      streak_now: '{n}-day streak', streak_best: 'Best: {n} days', streak_none: 'Take today\'s 100 points to start a streak',
++      soon: 'Due soon', admin_one: 'Only {n} admin number is set. Add a second one in ADMIN_PHONES, or corrections cannot be approved.', audit_csv: 'Download audit log CSV',
++      reset_title: 'Reset a player\'s password', reset_phone: 'Player\'s number', reset_make: 'Make code', reset_code: 'Give this code to the player. It works once, for {m} minutes: {c}',
++      forgot: 'Forgot your password?', reset_have: 'Reset code', reset_new: 'New password', reset_do: 'Set new password', back_login: 'Back to log in',
++      sp_title: 'Sponsor line', sp_en: 'Text (English)', sp_bn: 'Text (Bangla)', sp_url: 'Link (https://...)', sp_save: 'Save', sp_tag: 'Sponsored',
++      e_bad_link: 'The link must start with https://', e_bad_reset: 'That code is wrong or has expired', e_forbidden: 'Not allowed', e_bad_otp: 'That code is wrong or has expired', e_otp_unavailable: 'Codes cannot be sent right now',
+       e_bad_date: 'Pick a future date', e_need_source: 'Add the settlement source',
+       shortfall: 'Owed', notice: 'Correction: "{q}" changed from {a} to {b}. {p} pts {dir}.', taken: 'taken back', given: 'added', ok: 'OK',
+       debt_line: 'You owe {d} pts. New winnings and half of each daily bonus pay it off; you always get at least 50 pts a day to play.',
+@@ -244,7 +256,7 @@
+         catch (e) { bad(e); }
+       });
+     }
+-    var write = name === 'auth' || name === 'chphone' || name === 'delete' || name === 'logout' || name === 'gcreate' || name === 'gjoin' || name === 'gleave' || Core.isWrite(name), key = 'dp-c:' + name + ':' + JSON.stringify(args || {});
++    var write = name === 'auth' || name === 'chphone' || name === 'delete' || name === 'logout' || name === 'gcreate' || name === 'gjoin' || name === 'gleave' || name === 'resetpw' || name === 'usereset' || name === 'otpsend' || name === 'otpverify' || Core.isWrite(name), key = 'dp-c:' + name + ':' + JSON.stringify(args || {});
+     var url = '/api/' + name + (!write && args ? '?' + Object.keys(args).map(function (k) { return k + '=' + encodeURIComponent(args[k]); }).join('&') : '');
+     var opt = { method: write ? 'POST' : 'GET', headers: {} };
+     if (token) opt.headers.Authorization = 'Bearer ' + token;
+@@ -331,6 +343,12 @@
+   // ---- views ------------------------------------------------------------------------
+   var cat = sget('dp-cat') || 'all';
+   var V = {};
++  // Optional sponsor line (admin sets it under Sponsor line). Always labelled; no points or prizes attach to it.
++  function sponsorLine() {
++    var sp = site && site.sponsor; if (!sp) return '';
++    var txt = esc(sp[lang] || sp.en);
++    return '<p class="muted small"><span class="tag">' + t('sp_tag') + '</span> ' + (sp.url ? '<a href="' + esc(sp.url) + '" target="_blank" rel="sponsored noopener">' + txt + '</a>' : txt) + '</p>';
++  }
+   V.home = function () {
+     return api('home').then(function (d) {
+       me = d.me; if (d.signupOpen != null) signupOpen = d.signupOpen;
+@@ -344,7 +362,7 @@
+           var st = m.status === 'open' ? t('closes_at', { d: date(m.closes), t: clock(m.closes) }) : m.status === 'proposed' ? '<span class="tag">' + t('proposed') + ': ' + oname(m.proposal.out) + '</span>' : m.status === 'resolved' ? '<span class="tag">' + t('outcome') + ': ' + oname(m.outcome) + '</span>' : '<span class="tag">' + t('closed') + '</span>';
+           return '<a class="mk" href="#m-' + m.id + '"><span class="q">' + tx(m.q) + '</span><span class="pct">' + pct(m.p) + '<small>' + t('yes') + '</small></span>' +
+             '<span class="meta"><span class="tag">' + t(m.cat) + '</span>' + spark(m.spark) + '<span>' + st + '</span><span>' + num(m.traders) + ' ' + t('traders') + '</span></span></a>';
+-        }).join('') + '<p class="muted small">' + t('free') + '</p>';
++        }).join('') + '<p class="muted small">' + t('free') + '</p>' + sponsorLine();
+     });
+   };
+ 
+@@ -479,7 +497,8 @@
+     if (!LOCAL && !token) { sset('dp-after', 'groups'); return V.login(); }
+     return api('social').then(function (d) {
+       V._groups = d.groups;
+-      var h = '<div class="card"><h2>' + t('my_groups') + '</h2><p class="small muted" style="margin:0">' + t('g_intro') + '</p></div>';
++      var h = '<div class="card"><div class="row"><b>' + (d.streak ? t('streak_now', { n: dig(d.streak) }) : t('streak_none')) + '</b>' + (d.best ? '<span class="small muted">' + t('streak_best', { n: dig(d.best) }) + '</span>' : '') + '</div></div>' +
++        '<div class="card"><h2>' + t('my_groups') + '</h2><p class="small muted" style="margin:0">' + t('g_intro') + '</p></div>';
+       h += d.groups.length ? d.groups.map(function (g) {
+         return '<div class="card"><div class="row"><h2>' + esc(g.name) + '</h2><span class="tag">' + esc(g.code) + '</span></div><p class="small muted" style="margin:0">' + t('members', { n: dig(g.members.length) }) + '</p><div class="list">' +
+           g.members.map(function (x, i) { return '<div class="row' + (x.me ? ' me-row' : '') + '"><span><span class="muted">' + dig(i + 1) + '.</span> ' + esc(x.name) + '</span><span class="small muted">' + signed(x.week) + ' ' + t('week_gain') + ' · <b style="color:var(--ink)">' + num(x.worth) + '</b></span></div>'; }).join('') +
+@@ -541,6 +560,16 @@
+     document.body.appendChild(a); a.click(); a.remove();
+   }
+ 
++  // Full audit log as CSV. Cells that start with = + - @ get a leading ' so a spreadsheet never runs them as formulas.
++  function auditCsv() {
++    return api('auditall').then(function (r) {
++      var q = function (v) { v = String(v == null ? '' : v); if (/^[=+\-@\t\r]/.test(v)) v = "'" + v; return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
++      var text = 'time_utc,admin,action,details\n' + r.audit.map(function (x) { return [new Date(x.at).toISOString(), x.name, x.action, JSON.stringify(x.args)].map(q).join(','); }).join('\n') + '\n';
++      var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' })); a.download = 'audit-' + new Date().toISOString().slice(0, 10) + '.csv';
++      document.body.appendChild(a); a.click(); a.remove();
++    }, fail);
++  }
++
+   V.admin = function () {
+     return Promise.all([api('inbox'), api('metrics')]).then(function (both) {
+       var d = both[0], k = both[1];
+@@ -553,7 +582,7 @@
+         }).join('') + '<div class="muted">' + esc(Object.keys(k.events).map(function (e) { return e + ' ' + k.events[e]; }).join(' · ')) + '</div>' +
+         (k.deviceFlags.length ? '<div><b>' + t('m_flags') + ':</b> ' + k.deviceFlags.map(function (g) { return esc(g.join(', ')); }).join(' | ') + '</div>' : '') + '</div>' + retention(k) + '</details>';
+       var ph = d.proposed.length ? '<div class="card"><h3>' + t('proposed') + '</h3><div class="list">' + d.proposed.map(function (x) {
+-        return '<div class="row"><a href="#m-' + x.id + '">' + tx(x.q) + '</a><span class="small">' + oname(x.out) + ' · ' + date(x.until) + ', ' + clock(x.until) + (x.disputes ? ' · ' + t('disputes') + ' ' + dig(x.disputes) : '') + '</span></div>';
++        return '<div class="row"><a href="#m-' + x.id + '">' + tx(x.q) + '</a><span class="small">' + oname(x.out) + ' · ' + date(x.until) + ', ' + clock(x.until) + (x.disputes ? ' · ' + t('disputes') + ' ' + dig(x.disputes) : '') + (x.soon ? ' <span class="tag">' + t('soon') + '</span>' : '') + '</span></div>';
+       }).join('') + '</div></div>' : '';
+       var tpls = d.templates || {};
+       var dh = '<details class="card"><summary>' + t('daily') + '</summary><form id="openq" style="display:flex;flex-direction:column;gap:8px;padding-top:8px">' +
+@@ -566,7 +595,15 @@
+             (u.history ? u.history.slice(0, 10).map(function (x) { return '<div class="muted">' + date(x.at) + ' · ' + esc(x.kind) + ' ' + (x.side || '') + ' ' + num(x.pts) + (x.q ? ' · ' + tx(x.q).slice(0, 40) : '') + '</div>'; }).join('') : '') +
+             '<form class="adj" data-user="' + esc(u.id) + '" style="display:flex;gap:6px;flex-wrap:wrap;padding-top:6px"><input name="amt" inputmode="numeric" placeholder="' + t('adj_amt') + '" style="flex:1;min-width:90px"><input name="why" placeholder="' + t('adj_why') + '" style="flex:2;min-width:140px"><button class="ghost" type="submit">' + t('adjust') + '</button></form></div>';
+         }).join('') + '</div>' : '') + '</details>';
+-      var h = '<div class="card"><h2>' + t('inbox') + '</h2></div>' + mh + ph + dh + uh + '<div class="card"><h3>' + t('disputes') + '</h3><div class="list">' +
++      var one = d.adminCount != null && d.adminCount < 2 ? '<div class="banner"><span>' + t('admin_one', { n: dig(d.adminCount) }) + '</span></div>' : '';
++      var tools = '';
++      if (!LOCAL) tools += '<details class="card"><summary>' + t('reset_title') + '</summary><form id="rstmake" class="amt" style="padding-top:8px"><input id="rstphone" type="tel" inputmode="tel" placeholder="' + t('reset_phone') + '" required><button class="ghost" type="submit">' + t('reset_make') + '</button></form>' +
++        (V._rst ? '<p class="small" style="margin:8px 0 0">' + t('reset_code', { m: dig(V._rst.minutes), c: '<b>' + esc(V._rst.code) + '</b>' }) + '</p>' : '') + '</details>';
++      var spo = (site && site.sponsor) || {};
++      tools += '<details class="card"><summary>' + t('sp_title') + '</summary><form id="sponsor" style="display:flex;flex-direction:column;gap:8px;padding-top:8px">' +
++        '<label for="spen">' + t('sp_en') + '<input id="spen" maxlength="80" value="' + esc(spo.en || '') + '"></label><label for="spbn">' + t('sp_bn') + '<input id="spbn" maxlength="80" value="' + esc(spo.bn || '') + '"></label>' +
++        '<label for="spurl">' + t('sp_url') + '<input id="spurl" type="url" maxlength="200" value="' + esc(spo.url || '') + '"></label><button class="go" type="submit">' + t('sp_save') + '</button></form></details>';
++      var h = one + '<div class="card"><h2>' + t('inbox') + '</h2></div>' + mh + tools + ph + dh + uh + '<div class="card"><h3>' + t('disputes') + '</h3><div class="list">' +
+         (d.disputes.length ? d.disputes.map(function (x) {
+           return '<div><div class="row"><a href="#m-' + x.id + '">' + tx(x.q) + '</a><span class="tag">' + oname(x.outcome) + '</span></div><p class="small" style="margin:4px 0">' + esc(x.name) + ': ' + esc(x.reason) +
+             (x.link ? ' <a href="' + esc(x.link) + '" target="_blank" rel="noopener">↗</a>' : '') + '</p>' +
+@@ -587,7 +624,7 @@
+         '<button class="go" type="submit">' + t('create') + '</button></form></details>';
+       h += '<details class="card"><summary>' + t('audit') + '</summary><div class="list small">' + d.audit.map(function (x) {
+         return '<div>' + date(x.at) + ' · ' + esc(x.name) + ' · <b>' + esc(x.action) + '</b> <span class="muted">' + esc(JSON.stringify(x.args)).slice(0, 160) + '</span></div>';
+-      }).join('') + '</div></details>';
++      }).join('') + '</div><button class="ghost" type="button" id="auditcsv">' + t('audit_csv') + '</button></details>';
+       return h;
+     });
+   };
+@@ -629,7 +666,9 @@
+   };
+ 
+   var signup = true, signupOpen = null;
++  var resetMode = false;
+   V.login = function () {
++    if (resetMode) return Promise.resolve(resetForm());
+     if (signup && signupOpen === false) return Promise.resolve('<div class="card"><h2>' + t('signup') + '</h2><p style="margin:0">' + t('not_here') + '</p><button class="ghost" type="button" id="swap">' + t('have_acc') + '</button></div>');
+     return Promise.resolve('<form class="card" id="auth"><h2>' + t(signup ? 'signup' : 'login') + '</h2><p class="muted small" style="margin:0">' + t('start_pts') + '</p>' +
+       (signup ? '<label for="name">' + t('name') + '<input id="name" autocomplete="nickname" maxlength="24" required></label>' : '') +
+@@ -639,8 +678,15 @@
+         '<label class="check" for="adult"><input id="adult" type="checkbox" required> <span>' + t('adult_box') + '</span></label>' +
+         '<label class="check" for="consent"><input id="consent" type="checkbox" required> <span>' + t('consent_box') + '</span></label>' +
+         '<p class="small muted" style="margin:0">' + t('agree_terms') + ' <a href="#terms">' + t('terms') + '</a></p>' : '') +
+-      '<button class="go" type="submit">' + t(signup ? 'signup' : 'login') + '</button><button class="ghost" type="button" id="swap">' + t(signup ? 'have_acc' : 'new_acc') + '</button></form>');
++      '<button class="go" type="submit">' + t(signup ? 'signup' : 'login') + '</button><button class="ghost" type="button" id="swap">' + t(signup ? 'have_acc' : 'new_acc') + '</button>' + (!signup && !LOCAL ? '<button class="ghost" type="button" id="forgot">' + t('forgot') + '</button>' : '') + '</form>');
+   };
++  function resetForm() {
++    return '<form class="card" id="usereset"><h2>' + t('forgot') + '</h2>' +
++      '<label for="rphone">' + t('phone') + '<input id="rphone" type="tel" inputmode="tel" autocomplete="tel" required></label>' +
++      '<label for="rcode">' + t('reset_have') + '<input id="rcode" autocomplete="one-time-code" autocapitalize="off" required></label>' +
++      '<label for="rpin">' + t('reset_new') + '<input id="rpin" type="password" minlength="6" maxlength="64" autocomplete="new-password" required></label>' +
++      '<button class="go" type="submit">' + t('reset_do') + '</button><button class="ghost" type="button" id="backlogin">' + t('back_login') + '</button></form>';
++  }
+ 
+   // ---- router -----------------------------------------------------------------------
+   function route() {
+@@ -682,6 +728,7 @@
+     if (d.shcall) { var mk = V._m, pc = Core.priceYes(mk.b, mk.qy, mk.qn); return shareCard({ kind: 'call', q: mk.q[lang] || mk.q.en, side: d.shcall, p: d.shcall === 'y' ? pc : 1 - pc }); }
+     if (d.shwon) { var mw = V._m, bk = mw.myBook; return shareCard({ kind: 'called', q: mw.q[lang] || mw.q.en, side: mw.outcome, p: Math.min(0.99, bk.spent / bk[mw.outcome]), got: mw.myPaid, src: mw.src ? (mw.src[lang] || mw.src.en) : '' }); }
+     if (el.id === 'csv') return csvDownload();
++    if (el.id === 'auditcsv') return auditCsv();
+     if (el.id === 'shclose') { $('#sharesheet').hidden = true; return; }
+     if (el.id === 'shcopy') return copyText(V._cap);
+     if (d.side) { trade.side = d.side; return render(true); }
+@@ -707,6 +754,8 @@
+     if (el.id === 'ack') return api('ack').then(function () { render(true); }, fail);
+     if (el.id === 'bonus') return api('bonus').then(function () { toast(t('got_bonus')); render(true); }, fail);
+     if (el.id === 'reset') { sdel('dp-a-state'); location.hash = 'home'; location.reload(); return; }
++    if (el.id === 'forgot') { resetMode = true; return render(); }
++    if (el.id === 'backlogin') { resetMode = false; return render(); }
+     if (el.id === 'swap') { signup = !signup; return render(); }
+     if (el.id === 'logout') { api('logout').catch(function () {}); token = null; me = null; sdel('dp-token'); location.hash = 'home'; return; }
+   });
+@@ -727,6 +776,12 @@
+         $('#fbtext').value = ''; $('#fb').hidden = true; toast(t('fb_sent'));
+       }, fail);
+     }
++    if (ev.target.id === 'usereset') {
++      ev.preventDefault();
++      return api('usereset', { phone: $('#rphone').value, code: $('#rcode').value, pin: $('#rpin').value }).then(function (r) {
++        resetMode = false; token = r.token; sset('dp-token', token); location.hash = 'home'; render();
++      }, fail);
++    }
+     if (ev.target.id !== 'auth') return;
+     ev.preventDefault();
+     var body = { mode: signup ? 'signup' : 'login', phone: $('#phone').value, pin: $('#pin').value };
+@@ -741,6 +796,8 @@
+   document.addEventListener('submit', function (ev) {
+     var id = ev.target.id, done = function () { toast(t('saved')); render(true); };
+     if (id === 'openq') { ev.preventDefault(); return api('open', { tpl: $('#qtpl').value, x: $('#qx').value, date: $('#qdate').value }).then(function (r) { toast(t('created')); location.hash = 'm-' + r.id; }, fail); }
++    if (id === 'rstmake') { ev.preventDefault(); return api('resetpw', { phone: $('#rstphone').value }).then(function (r) { V._rst = r; render(true); }, fail); }
++    if (id === 'sponsor') { ev.preventDefault(); return api('sponsor', { en: $('#spen').value, bn: $('#spbn').value, url: $('#spurl').value }).then(done, fail); }
+     if (id === 'ufind') { ev.preventDefault(); V._uq = $('#uq').value; return api('users', { q: V._uq }).then(function (r) { V._users = r.users; render(true); }, fail); }
+     if (ev.target.classList.contains('adj')) {
+       ev.preventDefault();
+diff --git a/public/sw.js b/public/sw.js
+index dc238fd..69d2c1e 100644
+--- a/public/sw.js
++++ b/public/sw.js
+@@ -1,6 +1,6 @@
+ // Offline shell: app files are served from cache and refreshed in the background.
+ // API reads fall back to the copy app.js keeps in localStorage, so nothing to do here for /api.
+-var C = 'dp-a-v3', SHELL = ['/', '/app.css', '/core.js', '/app.js', '/icon.svg', '/manifest.webmanifest', '/share.js'];
++var C = 'dp-a-v4', SHELL = ['/', '/app.css', '/core.js', '/app.js', '/icon.svg', '/manifest.webmanifest', '/share.js'];
+ self.addEventListener('install', function (e) { e.waitUntil(caches.open(C).then(function (c) { return c.addAll(SHELL); }).then(function () { return self.skipWaiting(); })); });
+ self.addEventListener('activate', function (e) {
+   e.waitUntil(caches.keys().then(function (ks) { return Promise.all(ks.filter(function (k) { return k !== C; }).map(function (k) { return caches.delete(k); })); }).then(function () { return self.clients.claim(); }));
+diff --git a/test-features.js b/test-features.js
+new file mode 100644
+index 0000000..ab1c7d9
+--- /dev/null
++++ b/test-features.js
+@@ -0,0 +1,103 @@
++// Admin password reset, OTP scaffold, sponsor line, audit read, due-soon flag, threshold tool. Run: node test-features.js
++const assert = require('assert'), os = require('os'), path = require('path'), fs = require('fs');
++process.env.ADMIN_PHONES = '01711000000, +1 (202) 555-0123';
++const Core = require('./core.js'), { handleApi } = require('./lib/handler.js'), { createFileStore } = require('./lib/filestore.js');
++const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dpf-')), 'data.json');
++const store = createFileStore({ file, seed: () => Core.seed(Date.now(), { set: 'dhaka' }) });
++const call = (name, body = {}, token, method = 'POST', ip = '1.1.1.1') => handleApi(store, { method, name, body, token, ua: 'test', country: 'GB', ip });
++const signup = async (phone, name, pin) => (await call('auth', { mode: 'signup', phone, pin, name, adult: true, consent: true, device: 'dev-' + phone }))[1].token;
++
++(async () => {
++  const admin = await signup('+44 7700 900111', 'x', 'adminpass1'), adminB = await signup('01711000000', 'Admin', 'adminpass1');
++  const riya = await signup('+44 7700 900123', 'Riya', 'secret12');
++  assert.equal((await call('home', {}, adminB, 'GET'))[1].me.admin, true);
++
++  // ---- admin inbox: admin count and due-soon flag
++  let [st, r] = await call('inbox', {}, adminB, 'GET'); assert.equal(st, 200); assert.equal(r.adminCount, 2);
++  const mk = (await call('home', {}, null, 'GET'))[1].markets.find(m => m.status === 'open');
++  // propose a result: the dispute window is 24h or 48h, so it is not "soon" yet
++  await call('propose', { id: mk.id, outcome: 'y', hours: 24, note: 'x' }, adminB);
++  [st, r] = await call('inbox', {}, adminB, 'GET');
++  assert.equal(r.proposed.length, 1); assert.equal(r.proposed[0].soon, false, 'a fresh 24h window is not due soon');
++  await store.transact(s => { const m = s.markets.find(x => x.id === mk.id); if (m.proposal) m.proposal.until = Date.now() + 3600e3; });
++  [st, r] = await call('inbox', {}, adminB, 'GET');
++  assert.equal(r.proposed[0].soon, true, 'one hour left is due soon');
++
++  // ---- full audit log is admin only
++  assert.equal((await call('auditall', {}, riya, 'GET'))[1].error, 'forbidden');
++  [st, r] = await call('auditall', {}, adminB, 'GET'); assert.equal(st, 200); assert(Array.isArray(r.audit));
++
++  // ---- sponsor line
++  assert.equal((await call('sponsor', { en: 'Acme', url: 'https://acme.example' }, riya))[1].error, 'forbidden');
++  assert.equal((await call('sponsor', { en: 'Acme', url: 'javascript:alert(1)' }, adminB))[1].error, 'bad_link');
++  assert.equal((await call('sponsor', { en: 'Acme', url: 'http://acme.example' }, adminB))[1].error, 'bad_link', 'https only');
++  [st, r] = await call('sponsor', { en: 'Acme Tea', bn: 'অ্যাকমি চা', url: 'https://acme.example/?a=1' }, adminB);
++  assert.deepEqual(r.site.sponsor, { en: 'Acme Tea', bn: 'অ্যাকমি চা', url: 'https://acme.example/?a=1' });
++  assert.equal((await call('home', {}, null, 'GET'))[1].site.sponsor.en, 'Acme Tea');
++  [st, r] = await call('sponsor', { en: '' }, adminB); assert.equal(r.site.sponsor, undefined, 'empty text clears it');
++  assert(r.site.sponsor === undefined);
++
++  // ---- admin password reset
++  assert.equal((await call('resetpw', { phone: '+44 7700 900123' }, riya))[0], 403, 'players cannot make reset codes');
++  assert.equal((await call('resetpw', { phone: '+44 7700 900123' }))[0], 403, 'nor can guests');
++  assert.equal((await call('resetpw', { phone: '+44 7700 999999' }, adminB))[1].error, 'no_account');
++  assert.equal((await call('resetpw', { phone: '+44 7700 900123' }, adminB, 'GET'))[1].error, 'use_post');
++  [st, r] = await call('resetpw', { phone: '+44 7700 900123' }, adminB); assert.equal(st, 200); const rc = r.code; assert(rc.length >= 12);
++  assert(!JSON.stringify(await store.read()).includes(rc), 'only a hash of the code is stored');
++  assert(((await call('auditall', {}, adminB, 'GET'))[1].audit.some(x => x.action === 'resetpw')), 'resets are audited');
++  assert.equal((await call('usereset', { phone: '+44 7700 900123', code: 'wrongcode0000', pin: 'newpass12' }))[1].error, 'bad_reset');
++  assert.equal((await call('usereset', { phone: '+44 7700 900111', code: rc, pin: 'newpass12' }))[1].error, 'bad_reset', 'code only works for its own player');
++  assert.equal((await call('usereset', { phone: '+44 7700 900123', code: rc, pin: 'short' }))[1].error, 'bad_pin');
++  [st, r] = await call('usereset', { phone: '+44 7700 900123', code: rc, pin: 'newpass12' }); assert.equal(st, 200); assert(r.token);
++  assert.equal((await call('usereset', { phone: '+44 7700 900123', code: rc, pin: 'another12' }))[1].error, 'bad_reset', 'one use only');
++  assert.equal((await call('home', {}, riya, 'GET'))[1].me, null, 'old sessions end');
++  assert.equal((await call('home', {}, r.token, 'GET'))[1].me.name, 'Riya', 'new session works');
++  assert.equal((await call('auth', { mode: 'login', phone: '+44 7700 900123', pin: 'secret12' }))[1].error, 'wrong_login', 'old password is gone');
++  assert.equal((await call('auth', { mode: 'login', phone: '+44 7700 900123', pin: 'newpass12' }))[0], 200);
++  [st, r] = await call('resetpw', { phone: '+44 7700 900123' }, adminB); const old = r.code;
++  [st, r] = await call('resetpw', { phone: '+44 7700 900123' }, adminB);
++  assert.equal((await call('usereset', { phone: '+44 7700 900123', code: old, pin: 'newpass13' }))[1].error, 'bad_reset', 'a new code replaces the old one');
++  await store.transact(s => { for (const k of Object.keys(s.resets)) s.resets[k].exp = Date.now() - 1; });
++  assert.equal((await call('usereset', { phone: '+44 7700 900123', code: r.code, pin: 'newpass13' }))[1].error, 'bad_reset', 'expired');
++
++  // ---- OTP scaffold
++  assert.equal((await call('otpsend', { phone: '+44 7700 900123' }))[1].error, 'otp_unavailable', 'off by default');
++  assert.equal((await call('home', {}, null, 'GET'))[1].otp, false);
++  process.env.OTP_ENABLED = '1'; process.env.SMS_PROVIDER = 'console'; process.env.OTP_DAILY_CAP = '5';
++  const sent = [], log = console.log; console.log = (...a) => { const m = String(a[0]); if (m.startsWith('[sms:console]')) sent.push(m); else log(...a); };
++  try {
++    assert.equal((await call('home', {}, null, 'GET'))[1].otp, true);
++    assert.deepEqual(await call('otpsend', { phone: '+44 7700 900123' }), [200, { ok: true }]);
++    const code = sent[0].match(/code: (\d{6})/)[1];
++    assert.deepEqual(await call('otpsend', { phone: '+44 7700 888888' }), [200, { ok: true }], 'unknown number gets the same reply');
++    assert.equal(sent.length, 1, 'nothing is sent to an unknown number');
++    assert(!JSON.stringify(await store.read()).includes('"' + code + '"'), 'the code is stored hashed');
++    assert.equal((await call('otpverify', { phone: '+44 7700 900123', code: code === '000000' ? '000001' : '000000' }))[1].error, 'bad_otp');
++    [st, r] = await call('otpverify', { phone: '+44 7700 900123', code }); assert.equal(st, 200);
++    assert.equal((await call('home', {}, r.token, 'GET'))[1].me.name, 'Riya');
++    assert.equal((await call('otpverify', { phone: '+44 7700 900123', code }))[1].error, 'bad_otp', 'a code works once');
++    // 5 tries, then the code is dead even if the next guess is right
++    await call('otpsend', { phone: '+44 7700 900123' }); const c2 = sent[1].match(/code: (\d{6})/)[1], wrong = c2 === '111111' ? '222222' : '111111';
++    for (let i = 0; i < 5; i++) await call('otpverify', { phone: '+44 7700 900123', code: wrong });
++    assert.equal((await call('otpverify', { phone: '+44 7700 900123', code: c2 }))[1].error, 'bad_otp', 'locked after 5 tries');
++    // 3 sends per number per hour
++    assert.equal((await call('otpsend', { phone: '+44 7700 900123' }))[0], 200);
++    assert.equal((await call('otpsend', { phone: '+44 7700 900123' }))[1].error, 'slow_down', '4th send in an hour is refused');
++    // daily cap across numbers (cap 5; 3 used above)
++    const p2 = await signup('+44 7700 900200', 'B', 'secret12'), p3 = await signup('+44 7700 900201', 'C', 'secret12');
++    assert.equal((await call('otpsend', { phone: '+44 7700 900200' }, null, 'POST', '2.2.2.2'))[0], 200);
++    assert.equal((await call('otpsend', { phone: '+44 7700 900201' }, null, 'POST', '3.3.3.3'))[0], 200);
++    assert.equal((await call('otpsend', { phone: '+44 7700 900202' }, null, 'POST', '4.4.4.4'))[0], 200, 'unknown numbers use no budget');
++    const before = sent.length;
++    assert.equal((await call('otpsend', { phone: '+44 7700 900111' }, null, 'POST', '5.5.5.5'))[1].error, 'slow_down', 'daily cap reached');
++    assert.equal(sent.length, before);
++    // production refuses the console provider
++    process.env.NODE_ENV = 'production';
++    assert.equal(require('./lib/sms.js').available(), false); process.env.NODE_ENV = 'test';
++  } finally { console.log = log; delete process.env.OTP_ENABLED; delete process.env.SMS_PROVIDER; delete process.env.OTP_DAILY_CAP; process.env.NODE_ENV = ''; }
++
++  // ---- streak is served to the groups page
++  [st, r] = await call('social', {}, adminB, 'GET'); assert.equal(st, 200); assert(r.streak >= 0 && r.best >= 0);
++
++  console.log('feature tests passed');
++})().catch(e => { console.error(e); process.exit(1); });
