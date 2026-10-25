@@ -48,8 +48,9 @@ const me = async (st, tok) => (await call(st, 'home', {}, tok, 'GET'))[1].me;
   [s, a] = await su(st, '+12125550123', 'Mallory'); assert.equal((await me(st, a.token)).admin, false);
   // failed-pin counter cleared on chphone (F8)
   st = mem(); [s, a] = await su(st, '+8801811111111', 'P'); await call(st, 'chphone', { phone: '+8801822222222', pin: 'wrongpass' }, a.token);
-  assert(Object.keys((await st.read()).attempts || {}).length >= 1);
-  await call(st, 'chphone', { phone: '+8801822222222', pin: 'password1' }, a.token); assert.equal(Object.keys((await st.read()).attempts || {}).length, 0);
+  const failBefore = Object.keys((await st.read()).attempts || {}).length; assert(failBefore >= 1);
+  // fix-08 policy: success clears only this (ip, phone) pair's counter, never the shared per-ip and per-phone counters
+  await call(st, 'chphone', { phone: '+8801822222222', pin: 'password1' }, a.token); assert.equal(Object.keys((await st.read()).attempts || {}).length, failBefore - 1);
   // F6: adminCount = registered, active admins, not listed numbers
   st = mem(); [s, a] = await su(st, '01711000000', 'Only', { setup: 'launch-secret' });
   assert.equal((await call(st, 'inbox', {}, a.token, 'GET'))[1].adminCount, 1);

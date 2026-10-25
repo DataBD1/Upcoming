@@ -66,16 +66,43 @@ function normPhone(p, countries) {
 const tokHash = t => crypto.createHash('sha256').update(t).digest('hex');
 function code(c) { const e = new Error(c); e.code = c; return e; }
 
-// Login attempts live in the state so the limit holds across serverless instances.
-// Keyed by a hash of the number, so no plain phone number is kept for failed or unknown logins.
-function limited(state, phone, now) {
+// Attempt limiter. Failures live in the state (state.attempts: key -> [count, first-failure time])
+// so the limit holds across serverless instances. Keys are hashes: no plain phone number or IP is kept.
+// Only FAILURES count, and a success never touches another caller's counters. Numbers (15 min window):
+//   login:  6 failures per (ip, phone); 30 failures per ip across all phones;
+//           a per-phone ceiling of 60 failures from all IPs together. Past that ceiling nobody is locked
+//           out: each (ip, phone) pair just gets 2 tries instead of 6, so the owner (right password, own
+//           IP) can still sign in during an attack from elsewhere.
+//   reset:  its own buckets, 5 failures per (ip, phone) and 10 per ip across phones. It never blocks login.
+// The map is pruned of expired entries on every call and capped at ATT_MAX entries (oldest dropped first).
+const ATT_WIN = 15 * 60e3, ATT_MAX = 2000;
+const LOGIN_PAIR = 6, LOGIN_PAIR_HOT = 2, LOGIN_IP = 30, LOGIN_PHONE = 60, RESET_PAIR = 5, RESET_IP = 10;
+const akey = (...p) => tokHash('try:' + p.join('|')).slice(0, 24);
+function attGet(state, k, now) {
   state.attempts = state.attempts || {};
-  for (const p of Object.keys(state.attempts)) if (now - state.attempts[p][1] > 15 * 60e3) delete state.attempts[p];
-  const k = tokHash('try:' + phone).slice(0, 24), a = state.attempts[k];
-  if (!a || now - a[1] > 15 * 60e3) { state.attempts[k] = [1, now]; return false; }
-  return ++a[0] > 6;
+  const a = state.attempts[k];
+  return a && now - a[1] <= ATT_WIN ? a[0] : 0;
 }
-function clearAttempts(state, phone) { if (state.attempts) delete state.attempts[tokHash('try:' + phone).slice(0, 24)]; }
+function attPrune(state, now) {
+  const at = state.attempts = state.attempts || {}, ks = Object.keys(at);
+  for (const k of ks) if (now - at[k][1] > ATT_WIN) delete at[k];
+  const left = Object.keys(at);
+  if (left.length > ATT_MAX) left.sort((x, y) => at[x][1] - at[y][1]).slice(0, left.length - ATT_MAX).forEach(k => delete at[k]);
+}
+function attBump(state, ks, now) {
+  attPrune(state, now);
+  for (const k of ks) { const a = state.attempts[k]; if (a && now - a[1] <= ATT_WIN) a[0]++; else state.attempts[k] = [1, now]; }
+  attPrune(state, now);
+}
+const ipOf = ip => String(ip || '?');
+function loginLimited(state, phone, ip, now) {
+  const cap = attGet(state, akey('p', phone), now) >= LOGIN_PHONE ? LOGIN_PAIR_HOT : LOGIN_PAIR;
+  return attGet(state, akey('ip', ip = ipOf(ip), phone), now) >= cap || attGet(state, akey('i', ip), now) >= LOGIN_IP;
+}
+function loginFail(state, phone, ip, now) { attBump(state, [akey('ip', ipOf(ip), phone), akey('i', ipOf(ip)), akey('p', phone)], now); }
+function clearAttempts(state, phone, ip) { if (state.attempts) delete state.attempts[akey('ip', ipOf(ip), phone)]; }
+function resetLimited(state, phone, ip, now) { return attGet(state, akey('rp', ipOf(ip), phone), now) >= RESET_PAIR || attGet(state, akey('ri', ipOf(ip)), now) >= RESET_IP; }
+function resetFail(state, phone, ip, now) { attBump(state, [akey('rp', ipOf(ip), phone), akey('ri', ipOf(ip))], now); }
 // Sessions are [uid, signed-in time] and expire 30 days after sign-in. (Bare uid strings from older states still work.)
 const SESSION_MS = 30 * 864e5;
 function newSession(state, uid, now) {
@@ -92,17 +119,17 @@ function signupBlocked(site, country, phone, teamOk) {
   if (country && (site.blockedIpCountries || []).includes(String(country).toUpperCase())) return true;
   return !!phone && (site.blockedPhoneCodes || []).some(c => phone.startsWith('+' + c));
 }
-function auth(state, body, now, country) {
+function auth(state, body, now, country, ip) {
   state.auth = state.auth || {}; state.sessions = state.sessions || {};
   const phone = normPhone(body.phone, body.mode === 'signup' && state.site ? state.site.signupCountries : null), pin = String(body.pin || '');
   if (!phone) throw code('bad_phone');
   if (pin.length < 6 || pin.length > 64) throw code('bad_pin');
-  if (limited(state, phone, now)) throw code('slow_down');
+  if (loginLimited(state, phone, ip, now)) throw code('slow_down');
   const rec = state.auth[phone];
   if (body.mode === 'signup') {
-    if (rec) throw code('phone_taken');
+    if (rec) { loginFail(state, phone, ip, now); throw code('phone_taken'); }
     const su = setupState(body);
-    if (su.given && !su.ok) { if (limited(state, '#setup', now)) throw code('slow_down'); throw code('bad_setup'); }
+    if (su.given && !su.ok) { if (resetLimited(state, '#setup', ip, now)) throw code('slow_down'); resetFail(state, '#setup', ip, now); throw code('bad_setup'); }
     if (signupBlocked(state.site, country, phone, su.ok)) throw code('not_available');
     // A21 + A31: both boxes must be ticked by the player; the client never pre-ticks them.
     if (body.adult !== true) throw code('need_adult');
@@ -112,7 +139,6 @@ function auth(state, body, now, country) {
     const extra = { adultAt: now, consentAt: now, consentVer: PRIVACY_VERSION };
     if (ADMINS().includes(phone) && su.ok) extra.admin = true;
     Core.addUser(state, uid, body.name, now, extra);
-    clearAttempts(state, phone);
     // A27 duplicate-account guard: the browser sends a random device id; 3+ accounts on one device are flagged to admins.
     const dev = String(body.device || '').slice(0, 64);
     if (dev) { const k = tokHash('dev:' + dev).slice(0, 24); state.devices = state.devices || {}; (state.devices[k] = state.devices[k] || []).push(uid); }
@@ -122,11 +148,12 @@ function auth(state, body, now, country) {
   }
   // Same error and the same scrypt work whether or not the number has an account, so login doesn't reveal who plays.
   const h = crypto.scryptSync(pin, rec ? rec.salt : DUMMY_SALT, 32).toString('hex');
-  if (!rec || !crypto.timingSafeEqual(Buffer.from(h, 'hex'), Buffer.from(rec.hash, 'hex'))) throw code('wrong_login');
-  clearAttempts(state, phone);
+  if (!rec || !crypto.timingSafeEqual(Buffer.from(h, 'hex'), Buffer.from(rec.hash, 'hex'))) { loginFail(state, phone, ip, now); throw code('wrong_login'); }
+  clearAttempts(state, phone, ip);
+  revokeResets(state, r => r.uid === rec.uid); // the player got in with their password: any admin-issued code dies
   // Login-time grant: an existing player whose number is in ADMIN_PHONES becomes admin by presenting the setup code.
   const su = setupState(body);
-  if (su.given && !su.ok) { if (limited(state, '#setup', now)) throw code('slow_down'); throw code('bad_setup'); }
+  if (su.given && !su.ok) { if (resetLimited(state, '#setup', ip, now)) throw code('slow_down'); resetFail(state, '#setup', ip, now); throw code('bad_setup'); }
   if (su.given && su.ok && ADMINS().includes(phone) && state.users[rec.uid]) state.users[rec.uid].admin = true;
   if (state.users[rec.uid] && state.users[rec.uid].admin) Core.audit(state, rec.uid, 'login', { mode: 'login' }, now);
   return { token: newSession(state, rec.uid, now) };
@@ -138,31 +165,38 @@ function auth(state, body, now, country) {
 // passes it on by hand. The player enters it with a new password on the login screen. Only a
 // hash of the code is stored, the action is audited, and all of the player's sessions end.
 const RESET_MS = 36e5;
+// An admin account can not be reset in the app (whoever holds the server config recovers it). Players can.
+const isAdminAcct = (s, phone, uid) => !!(s.users[uid] && s.users[uid].admin) || ADMINS().includes(phone);
+function revokeResets(s, pred) { for (const k of Object.keys(s.resets || {})) if (pred(s.resets[k])) delete s.resets[k]; }
 function issueReset(s, adminUid, phoneIn, now) {
   if (!adminUid || !s.users[adminUid] || !s.users[adminUid].admin) throw code('forbidden');
   const phone = normPhone(phoneIn), rec = phone && s.auth && s.auth[phone];
   if (!rec) throw code('no_account');
+  if (isAdminAcct(s, phone, rec.uid)) throw code('admin_reset_denied');
   s.resets = s.resets || {};
   for (const k of Object.keys(s.resets)) if (s.resets[k].exp < now) delete s.resets[k];
   for (const k of Object.keys(s.resets)) if (s.resets[k].uid === rec.uid) delete s.resets[k]; // one live code per player
   const token = crypto.randomBytes(9).toString('base64url');
-  s.resets[tokHash('reset:' + token)] = { uid: rec.uid, exp: now + RESET_MS };
+  s.resets[tokHash('reset:' + token)] = { uid: rec.uid, exp: now + RESET_MS, by: adminUid };
   Core.audit(s, adminUid, 'resetpw', { user: rec.uid }, now);
   return { code: token, minutes: RESET_MS / 6e4 };
 }
-function useReset(s, body, now) {
+function useReset(s, body, now, ip) {
   s.auth = s.auth || {}; s.sessions = s.sessions || {}; s.resets = s.resets || {};
   const phone = normPhone(body.phone), pin = String(body.pin || '');
   if (!phone) throw code('bad_phone');
   if (pin.length < 6 || pin.length > 64) throw code('bad_pin');
-  if (limited(s, phone, now)) throw code('slow_down');
+  if (resetLimited(s, phone, ip, now)) throw code('slow_down');
   const rec = s.auth[phone], k = tokHash('reset:' + String(body.code || '').trim()), r = s.resets[k];
-  if (!rec || !r || r.exp < now || r.uid !== rec.uid) throw code('bad_reset');
+  // The issuing admin must still be an admin now; a code from a demoted or deleted admin is void.
+  if (!rec || !r || r.exp < now || r.uid !== rec.uid || !(r.by && s.users[r.by] && s.users[r.by].admin)) { resetFail(s, phone, ip, now); throw code('bad_reset'); }
+  if (isAdminAcct(s, phone, rec.uid)) { delete s.resets[k]; throw code('admin_reset_denied'); }
   delete s.resets[k];
   rec.salt = crypto.randomBytes(12).toString('hex');
   rec.hash = crypto.scryptSync(pin, rec.salt, 32).toString('hex');
   for (const t of Object.keys(s.sessions)) { const v = s.sessions[t]; if ((Array.isArray(v) ? v[0] : v) === rec.uid) delete s.sessions[t]; }
-  clearAttempts(s, phone);
+  clearAttempts(s, phone, ip);
+  Core.audit(s, rec.uid, 'resetpw_used', { user: rec.uid, by: r.by }, now); // no code, no secrets
   return { token: newSession(s, rec.uid, now) };
 }
 
@@ -214,7 +248,7 @@ async function handleApi(store, { method, name, body, token, ua, country, ip }) 
     if (!/^[a-z]{2,20}$/.test(name)) throw code('unknown'); // action names are plain lowercase words
     if (name === 'auth') {
       if (method !== 'POST') throw code('use_post');
-      const r = await store.transact(s => { Core.migrate(s); try { return [200, auth(s, body, now, country)]; } catch (e) { if (!e.code) throw e; return [400, { error: e.code }]; } });
+      const r = await store.transact(s => { Core.migrate(s); try { return [200, auth(s, body, now, country, ip)]; } catch (e) { if (!e.code) throw e; return [400, { error: e.code }]; } });
       return r;
     }
     if (name === 'resetpw' || name === 'usereset') {
@@ -222,10 +256,10 @@ async function handleApi(store, { method, name, body, token, ua, country, ip }) 
       return await store.transact(s => {
         Core.migrate(s);
         try {
-          if (name === 'usereset') return [200, useReset(s, body, now)];
+          if (name === 'usereset') return [200, useReset(s, body, now, ip)];
           const uid = syncAdmin(s, (token && s.sessions && sessUid(s.sessions[tokHash(token)], now)) || null);
           return [200, issueReset(s, uid, body.phone, now)];
-        } catch (e) { if (!e.code) throw e; return [e.code === 'forbidden' ? 403 : 400, { error: e.code }]; }
+        } catch (e) { if (!e.code) throw e; return [e.code === 'forbidden' || e.code === 'admin_reset_denied' ? 403 : 400, { error: e.code }]; }
       });
     }
     if (name === 'otpsend') {
@@ -259,21 +293,22 @@ async function handleApi(store, { method, name, body, token, ua, country, ip }) 
         try {
           const uid = uidIn(s); if (!uid) throw code('login');
           const phone = Object.keys(s.auth).find(p => s.auth[p].uid === uid), rec = s.auth[phone];
-          if (limited(s, phone, now)) throw code('slow_down');
+          if (loginLimited(s, phone, ip, now)) throw code('slow_down');
           const h = crypto.scryptSync(String(body.pin || ''), rec.salt, 32).toString('hex');
-          if (!crypto.timingSafeEqual(Buffer.from(h, 'hex'), Buffer.from(rec.hash, 'hex'))) throw code('wrong_pin');
-          clearAttempts(s, phone);
+          if (!crypto.timingSafeEqual(Buffer.from(h, 'hex'), Buffer.from(rec.hash, 'hex'))) { loginFail(s, phone, ip, now); throw code('wrong_pin'); }
+          clearAttempts(s, phone, ip);
           if (name === 'chphone') {
             const np = normPhone(body.phone, s.site && s.site.signupCountries);
             if (!np) throw code('bad_phone');
             if (s.auth[np]) throw code('phone_taken');
             s.auth[np] = rec; delete s.auth[phone];
-            if (s.users[uid].admin) { Core.audit(s, uid, 'chphone', { user: uid, demoted: true }, now); delete s.users[uid].admin; } // the old number must not stay claimable; the new one needs the setup code at login
+            if (s.users[uid].admin) { Core.audit(s, uid, 'chphone', { user: uid, demoted: true }, now); delete s.users[uid].admin; revokeResets(s, r => r.by === uid); } // the old number must not stay claimable; the new one needs the setup code at login
+            revokeResets(s, r => r.uid === uid);
             return [200, { ok: true }];
           }
           if (s.users[uid].admin) Core.audit(s, uid, 'delete', { user: uid }, now);
           delete s.auth[phone];
-          clearAttempts(s, phone);
+          revokeResets(s, r => r.uid === uid || r.by === uid);
           for (const k of Object.keys(s.sessions)) if (sessUid(s.sessions[k], now) === uid || (Array.isArray(s.sessions[k]) && s.sessions[k][0] === uid)) delete s.sessions[k];
           Core.deleteUser(s, uid, now);
           return [200, { ok: true }];
