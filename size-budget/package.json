@@ -1,0 +1,9 @@
+{
+  "name": "size-budget",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "bin": { "size-budget": "index.js" },
+  "scripts": { "test": "node test.js", "size": "node index.js" },
+  "engines": { "node": ">=18" }
+}

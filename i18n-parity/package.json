@@ -1,0 +1,9 @@
+{
+  "name": "i18n-parity",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "bin": { "i18n-parity": "index.js" },
+  "scripts": { "test": "node test.js" },
+  "engines": { "node": ">=18" }
+}

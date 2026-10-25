@@ -1,0 +1,9 @@
+{
+  "name": "threshold-suggester",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "bin": { "threshold": "index.js" },
+  "scripts": { "test": "node test.js" },
+  "engines": { "node": ">=18" }
+}
