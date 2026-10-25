@@ -54,9 +54,11 @@
       streak_now: 'টানা {n} দিন', streak_best: 'সেরা: {n} দিন', streak_none: 'আজকের ১০০ পয়েন্ট নিলে ধারা শুরু হবে',
       soon: 'শীঘ্রই শেষ', admin_one: 'মাত্র {n}টি অ্যাডমিন নম্বর দেওয়া আছে। ADMIN_PHONES-এ দ্বিতীয় নম্বর যোগ করুন, না হলে সংশোধন অনুমোদন করা যাবে না।', audit_csv: 'অডিট লগ CSV নামান',
       reset_title: 'খেলোয়াড়ের পাসওয়ার্ড রিসেট', reset_phone: 'খেলোয়াড়ের নম্বর', reset_make: 'কোড বানান', reset_code: 'এই কোডটি খেলোয়াড়কে দিন। একবারই কাজ করবে, {m} মিনিট: {c}',
+      reset_note: 'অ্যাডমিন অ্যাকাউন্ট এখান থেকে রিসেট করা যায় না। নতুন কোড বানালে আগের কোড বাতিল হয়।',
       forgot: 'পাসওয়ার্ড ভুলে গেছেন?', otp_login: 'এসএমএস কোড দিয়ে লগইন', otp_send: 'কোড পাঠান', otp_code: 'কোড', otp_verify: 'লগইন', otp_sent: 'এই নম্বরে অ্যাকাউন্ট থাকলে একটি কোড পাঠানো হয়েছে।', reset_have: 'রিসেট কোড', reset_new: 'নতুন পাসওয়ার্ড', reset_do: 'নতুন পাসওয়ার্ড দিন', back_login: 'লগইনে ফিরুন',
       sp_title: 'স্পনসর লাইন', sp_en: 'লেখা (ইংরেজি)', sp_bn: 'লেখা (বাংলা)', sp_url: 'লিংক (https://...)', sp_save: 'সংরক্ষণ', sp_tag: 'স্পনসর',
       e_bad_link: 'লিংক https:// দিয়ে শুরু হতে হবে', e_bad_reset: 'কোডটি ভুল বা মেয়াদ শেষ', e_forbidden: 'অনুমতি নেই', e_bad_otp: 'কোড ভুল বা মেয়াদ শেষ', e_otp_unavailable: 'এখন কোড পাঠানো যাচ্ছে না',
+      e_admin_reset_denied: 'অ্যাডমিন অ্যাকাউন্ট এখান থেকে রিসেট করা যায় না',
       e_bad_date: 'ভবিষ্যতের একটি তারিখ দিন', e_need_source: 'নিষ্পত্তির উৎস দিন',
       shortfall: 'বাকি', notice: 'সংশোধন: "{q}" এর ফলাফল {a} থেকে {b} করা হয়েছে। {p} পয়েন্ট {dir}।', taken: 'ফেরত নেওয়া হয়েছে', given: 'যোগ হয়েছে', ok: 'ঠিক আছে',
       debt_line: 'আপনার {d} পয়েন্ট বাকি আছে। নতুন জেতা পয়েন্ট আর প্রতিদিনের বোনাসের অর্ধেক দিয়ে এটা শোধ হবে। প্রতিদিন অন্তত ৫০ পয়েন্ট খেলতে পারবেন।',
@@ -122,9 +124,11 @@
       streak_now: '{n}-day streak', streak_best: 'Best: {n} days', streak_none: 'Take today\'s 100 points to start a streak',
       soon: 'Due soon', admin_one: 'Only {n} admin number is set. Add a second one in ADMIN_PHONES, or corrections cannot be approved.', audit_csv: 'Download audit log CSV',
       reset_title: 'Reset a player\'s password', reset_phone: 'Player\'s number', reset_make: 'Make code', reset_code: 'Give this code to the player. It works once, for {m} minutes: {c}',
+      reset_note: 'Admin accounts cannot be reset here. A new code cancels the previous one.',
       forgot: 'Forgot your password?', otp_login: 'Log in with an SMS code', otp_send: 'Send code', otp_code: 'Code', otp_verify: 'Log in', otp_sent: 'If that number has an account, a code was sent.', reset_have: 'Reset code', reset_new: 'New password', reset_do: 'Set new password', back_login: 'Back to log in',
       sp_title: 'Sponsor line', sp_en: 'Text (English)', sp_bn: 'Text (Bangla)', sp_url: 'Link (https://...)', sp_save: 'Save', sp_tag: 'Sponsored',
       e_bad_link: 'The link must start with https://', e_bad_reset: 'That code is wrong or has expired', e_forbidden: 'Not allowed', e_bad_otp: 'That code is wrong or has expired', e_otp_unavailable: 'Codes cannot be sent right now',
+      e_admin_reset_denied: 'Admin accounts cannot be reset here',
       e_bad_date: 'Pick a future date', e_need_source: 'Add the settlement source',
       shortfall: 'Owed', notice: 'Correction: "{q}" changed from {a} to {b}. {p} pts {dir}.', taken: 'taken back', given: 'added', ok: 'OK',
       debt_line: 'You owe {d} pts. New winnings and half of each daily bonus pay it off; you always get at least 50 pts a day to play.',
@@ -598,6 +602,7 @@
       var one = d.adminCount != null && d.adminCount < 2 ? '<div class="banner"><span>' + t('admin_one', { n: dig(d.adminCount) }) + '</span></div>' : '';
       var tools = '';
       if (!LOCAL) tools += '<details class="card"><summary>' + t('reset_title') + '</summary><form id="rstmake" class="amt" style="padding-top:8px"><input id="rstphone" type="tel" inputmode="tel" placeholder="' + t('reset_phone') + '" required><button class="ghost" type="submit">' + t('reset_make') + '</button></form>' +
+        '<p class="small muted" style="margin:8px 0 0">' + t('reset_note') + '</p>' +
         (V._rst ? '<p class="small" style="margin:8px 0 0">' + t('reset_code', { m: dig(V._rst.minutes), c: '<b>' + esc(V._rst.code) + '</b>' }) + '</p>' : '') + '</details>';
       var spo = (site && site.sponsor) || {};
       tools += '<details class="card"><summary>' + t('sp_title') + '</summary><form id="sponsor" style="display:flex;flex-direction:column;gap:8px;padding-top:8px">' +
