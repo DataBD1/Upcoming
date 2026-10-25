@@ -1,5 +1,6 @@
 // Sequential per-operation cost at N players, with how many shard rows each write touched: node bench/ops.js 10000
 'use strict';
+require('./latency.js'); // LAT_MS=10 adds network latency to every database round trip
 const fs = require('fs'), os = require('os'), path = require('path');
 const N = +process.argv[2] || 10000;
 const EmbeddedPostgres = require('embedded-postgres').default;

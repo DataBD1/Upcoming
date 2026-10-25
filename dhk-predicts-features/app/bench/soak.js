@@ -2,13 +2,14 @@
 //   node bench/soak.js <players> <requests/s> <seconds> <server copies>     e.g. node bench/soak.js 10000 60 40 3
 // Mix: 55% home, 15% market page, 8% leaders, 14% buy, 3% daily top-up, 2% feedback, 1% login, 2% session check (me).
 'use strict';
+require('./latency.js'); // LAT_MS=10 adds network latency to every database round trip
 const fs = require('fs'), os = require('os'), path = require('path');
 const [N, RATE, SECS, INST] = [10000, 60, 40, 3].map((d, i) => +process.argv[2 + i] || d);
 const EmbeddedPostgres = require('embedded-postgres').default;
 (async () => {
-  const pg = new EmbeddedPostgres({ databaseDir: fs.mkdtempSync(path.join(os.tmpdir(), 'sk-')), user: 't', password: 't', port: 54335, persistent: false, onLog: () => {} });
+  const pg = new EmbeddedPostgres({ databaseDir: fs.mkdtempSync(path.join(os.tmpdir(), 'sk-')), user: 't', password: 't', port: +process.env.PGPORT_SOAK || 54335, persistent: false, onLog: () => {} });
   await pg.initialise(); await pg.start();
-  const url = 'postgres://t:t@localhost:54335/postgres'; process.env.POSTGRES_URL = url; process.env.ADMIN_PHONES = '01711000000';
+  const url = 'postgres://t:t@localhost:' + (+process.env.PGPORT_SOAK || 54335) + '/postgres'; process.env.POSTGRES_URL = url; process.env.ADMIN_PHONES = '01711000000';
   const Core = require('../core.js'), { createStore } = require('../lib/pgstore.js'), { handleApi } = require('../lib/handler.js');
   const stores = Array.from({ length: INST }, () => createStore({ url, key: 'rival-a', seed: () => Core.seed(Date.now()) }));
   try {
@@ -41,13 +42,17 @@ const EmbeddedPostgres = require('embedded-postgres').default;
     const t0 = Date.now(), jobs = [];
     await new Promise(done => { const tick = setInterval(() => { if (Date.now() - t0 > SECS * 1000) { clearInterval(tick); done(); return; } const due = Math.floor((Date.now() - t0) / 1000 * RATE) - jobs.length; for (let k = 0; k < due; k++) jobs.push(run(pick())); }, 5); });
     await Promise.all(jobs);
+    const dt = (Date.now() - t0) / 1000;
     const q = (a, p) => a[Math.min(a.length - 1, Math.floor(a.length * p))];
     console.log(`${N} players, ${INST} server copies, ${RATE} req/s for ${SECS}s => ${jobs.length} requests, peak in flight ${peak}`);
     let worst = 0, bad = 0;
     for (const [n] of MIX) { const s = stats[n]; if (!s) continue; s.ms.sort((a, b) => a - b); worst = Math.max(worst, q(s.ms, .95)); bad += s.bad;
       console.log(n.padEnd(10), String(s.ms.length).padStart(5), 'req  p50', q(s.ms, .5).toFixed(0).padStart(5), ' p95', q(s.ms, .95).toFixed(0).padStart(5), ' p99', q(s.ms, .99).toFixed(0).padStart(5), ' ms  server errors', s.bad, ' refused', s.refused, Object.keys(s.err).join(' ')); }
     console.log(bad ? 'FAIL: server errors' : 'no server errors', '| slowest p95', worst.toFixed(0), 'ms');
-    process.exitCode = bad ? 1 : 0;
+    // End of run: every copy re-syncs and its WHOLE cache is compared with the database (a divergence is a failure).
+    let diverged = 0; for (const x of stores) { try { await x.verify(); } catch (e) { diverged++; console.log('DIVERGED:', String(e.message).slice(0, 200)); } }
+    console.log(diverged ? 'FAIL: cache differs from the database' : 'every copy\'s cache equals the database', '| achieved', (jobs.length / dt).toFixed(1), 'req/s of', RATE, 'offered |', process.env.LAT_MS ? 'LAT_MS=' + process.env.LAT_MS : 'no injected latency');
+    process.exitCode = bad || diverged ? 1 : 0;
   } finally { for (const x of stores) await x.end(); await pg.stop(); }
   process.exit(process.exitCode || 0);
 })().catch(e => { console.error(e); process.exit(1); });

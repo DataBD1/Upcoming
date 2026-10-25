@@ -8,7 +8,7 @@
     "start": "node server.js",
     "test": "node test.js && node test-api.js && node test-disputes.js && node test-resolution.js && node test-security.js && node test-social.js && node test-retention.js && node test-features.js && npm run check",
     "check": "node ../../i18n-parity/index.js public/app.js \"var T = \" bn en && node ../../size-budget/index.js size-budget.json",
-    "test:pg": "node test-pg.js"
+    "test:pg": "node test-pg.js && node test-pgstore.js"
   },
   "dependencies": {
     "pg": "^8.23.1",

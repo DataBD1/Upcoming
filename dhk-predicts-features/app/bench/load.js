@@ -3,6 +3,7 @@
 // Players are added to the state directly (cheap password hashes), so seeding 10k takes seconds; a few real
 // accounts are then signed up through the API (real scrypt) and used to time reads and writes.
 'use strict';
+require('./latency.js'); // LAT_MS=10 adds network latency to every database round trip
 const fs = require('fs'), os = require('os'), path = require('path'), crypto = require('crypto');
 const N = +process.argv[2] || 10000, CONC = +process.argv[3] || 10, INST = +process.argv[4] || 1; // INST = server copies sharing the database
 const EmbeddedPostgres = require('embedded-postgres').default;

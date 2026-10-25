@@ -1,5 +1,6 @@
 // Per-request cost with no concurrency, split into phases: node bench/prof.js 10000 (non-root, after npm install)
 'use strict';
+require('./latency.js'); // LAT_MS=10 adds network latency to every database round trip
 const fs = require('fs'), os = require('os'), path = require('path');
 const N = +process.argv[2] || 10000;
 const EmbeddedPostgres = require('embedded-postgres').default;
