@@ -61,15 +61,16 @@ const signup = async (phone, name, pin) => (await call('auth', { mode: 'signup',
   assert.equal((await call('usereset', { phone: '+44 7700 900123', code: r.code, pin: 'newpass13' }))[1].error, 'bad_reset', 'expired');
 
   // ---- OTP scaffold
+  const idle = require('./lib/handler.js').otpIdle;
   assert.equal((await call('otpsend', { phone: '+44 7700 900123' }))[1].error, 'otp_unavailable', 'off by default');
   assert.equal((await call('home', {}, null, 'GET'))[1].otp, false);
   process.env.OTP_ENABLED = '1'; process.env.SMS_PROVIDER = 'console'; process.env.OTP_DAILY_CAP = '5';
   const sent = [], log = console.log; console.log = (...a) => { const m = String(a[0]); if (m.startsWith('[sms:console]')) sent.push(m); else log(...a); };
   try {
     assert.equal((await call('home', {}, null, 'GET'))[1].otp, true);
-    assert.deepEqual(await call('otpsend', { phone: '+44 7700 900123' }), [200, { ok: true }]);
-    const code = sent[0].match(/code: (\d{6})/)[1];
-    assert.deepEqual(await call('otpsend', { phone: '+44 7700 888888' }), [200, { ok: true }], 'unknown number gets the same reply');
+    assert.deepEqual(await call('otpsend', { phone: '+44 7700 900123' }), [200, { ok: true }]); await idle();
+    const code = sent[0].match(/code is (\d{6})/)[1];
+    assert.deepEqual(await call('otpsend', { phone: '+44 7700 888888' }), [200, { ok: true }], 'unknown number gets the same reply'); await idle();
     assert.equal(sent.length, 1, 'nothing is sent to an unknown number');
     assert(!JSON.stringify(await store.read()).includes('"' + code + '"'), 'the code is stored hashed');
     assert.equal((await call('otpverify', { phone: '+44 7700 900123', code: code === '000000' ? '000001' : '000000' }))[1].error, 'bad_otp');
@@ -77,20 +78,22 @@ const signup = async (phone, name, pin) => (await call('auth', { mode: 'signup',
     assert.equal((await call('home', {}, r.token, 'GET'))[1].me.name, 'Riya');
     assert.equal((await call('otpverify', { phone: '+44 7700 900123', code }))[1].error, 'bad_otp', 'a code works once');
     // 5 tries, then the code is dead even if the next guess is right
-    await call('otpsend', { phone: '+44 7700 900123' }); const c2 = sent[1].match(/code: (\d{6})/)[1], wrong = c2 === '111111' ? '222222' : '111111';
+    await call('otpsend', { phone: '+44 7700 900123' }); await idle(); const c2 = sent[1].match(/code is (\d{6})/)[1], wrong = c2 === '111111' ? '222222' : '111111';
     for (let i = 0; i < 5; i++) await call('otpverify', { phone: '+44 7700 900123', code: wrong });
     assert.equal((await call('otpverify', { phone: '+44 7700 900123', code: c2 }))[1].error, 'bad_otp', 'locked after 5 tries');
     // 3 sends per number per hour
-    assert.equal((await call('otpsend', { phone: '+44 7700 900123' }))[0], 200);
-    assert.equal((await call('otpsend', { phone: '+44 7700 900123' }))[1].error, 'slow_down', '4th send in an hour is refused');
+    assert.equal((await call('otpsend', { phone: '+44 7700 900123' }))[0], 200); await idle();
+    const n3 = sent.length;
+    assert.deepEqual(await call('otpsend', { phone: '+44 7700 900123' }), [200, { ok: true }], '4th send in an hour: same reply'); await idle();
+    assert.equal(sent.length, n3, '4th send in an hour sends nothing');
     // daily cap across numbers (cap 5; 3 used above)
     const p2 = await signup('+44 7700 900200', 'B', 'secret12'), p3 = await signup('+44 7700 900201', 'C', 'secret12');
     assert.equal((await call('otpsend', { phone: '+44 7700 900200' }, null, 'POST', '2.2.2.2'))[0], 200);
-    assert.equal((await call('otpsend', { phone: '+44 7700 900201' }, null, 'POST', '3.3.3.3'))[0], 200);
+    assert.equal((await call('otpsend', { phone: '+44 7700 900201' }, null, 'POST', '3.3.3.3'))[0], 200); await idle();
     assert.equal((await call('otpsend', { phone: '+44 7700 900202' }, null, 'POST', '4.4.4.4'))[0], 200, 'unknown numbers use no budget');
     const before = sent.length;
-    assert.equal((await call('otpsend', { phone: '+44 7700 900111' }, null, 'POST', '5.5.5.5'))[1].error, 'slow_down', 'daily cap reached');
-    assert.equal(sent.length, before);
+    assert.deepEqual(await call('otpsend', { phone: '+44 7700 900111' }, null, 'POST', '5.5.5.5'), [200, { ok: true }], 'daily cap reached: same reply'); await idle();
+    assert.equal(sent.length, before, 'daily cap reached: nothing sent');
     // production refuses the console provider
     process.env.NODE_ENV = 'production';
     assert.equal(require('./lib/sms.js').available(), false); process.env.NODE_ENV = 'test';

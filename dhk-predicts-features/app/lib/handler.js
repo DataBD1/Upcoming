@@ -134,43 +134,95 @@ function useReset(s, body, now) {
 }
 
 // ---- Phone OTP scaffold (B9) ----------------------------------------------------
-// Off unless OTP_ENABLED=1 and an SMS provider is configured (lib/sms.js). A code is 6 digits,
-// stored hashed, valid 5 minutes, 5 tries. Limits: 3 sends per number per hour, 10 per IP per hour,
-// and a daily cap on total sends (OTP_DAILY_CAP, default 200) so a flood cannot run up the SMS bill.
+// Off unless OTP_ENABLED=1 and an SMS provider is configured (lib/sms.js). In production it also needs
+// OTP_DAILY_CAP (an explicit hard cap on sends per day) and OTP_SECRET (HMAC key for codes), else it stays off.
+// A code is 6 digits, stored as an HMAC, valid 5 minutes, 5 tries (tries carry over when a new code is sent).
+// Limits per hour: 3 sends and 10 verify attempts per number, 10 sends and 30 verify attempts per IP.
+// Per day: OTP_DAILY_CAP in total and a budget per destination country (OTP_COUNTRY_CAPS, "44:40,1:60").
+// Only destination countries in OTP_COUNTRIES (calling codes, default 44,1,971,880) get a code.
+// Never for admin accounts (a SIM swap must not give admin access). Unknown, admin, rate-limited and
+// provider-failure cases all get the same reply, sent immediately; the SMS goes out after the reply.
 // Verifying signs in an existing account; it does not create one (sign-up still uses a password).
-const OTP_MS = 5 * 60e3, HOUR = 36e5;
-const otpOn = () => process.env.OTP_ENABLED === '1' && Sms.available();
-function otpPrep(s, phone, ip, now) {
+// State: top-level maps otpcodes and otpsends (key -> record / timestamps) plus otp {day, n}.
+const OTP_MS = 5 * 60e3, HOUR = 36e5, DAY = 864e5, OTP_MAX_KEYS = 20000;
+const OTP_CAPS = { 880: 150, 1: 60, 44: 40, 971: 20 }; // default sends per country per rolling 24h
+const otpSecret = () => process.env.OTP_SECRET || (isProd() ? '' : 'dev-only-otp-secret');
+const otpCap = () => Number(process.env.OTP_DAILY_CAP) > 0 ? Number(process.env.OTP_DAILY_CAP) : (isProd() ? 0 : 200);
+const otpOn = () => process.env.OTP_ENABLED === '1' && Sms.available() && !!otpSecret() && otpCap() > 0;
+const otpMac = t => crypto.createHmac('sha256', otpSecret()).update(t).digest('hex');
+const otpCountries = () => (process.env.OTP_COUNTRIES || '44,1,971,880').split(',').map(x => x.trim().replace(/^\+/, '')).filter(x => /^\d{1,4}$/.test(x));
+function otpCountry(phone) { // longest allowed calling code the number starts with, else null
+  const d = phone.slice(1); let best = null;
+  for (const c of otpCountries()) if (d.startsWith(c) && (!best || c.length > best.length)) best = c;
+  return best;
+}
+function otpCountryCap(c) {
+  for (const kv of (process.env.OTP_COUNTRY_CAPS || '').split(',')) { const [k, v] = kv.split(':'); if (k && k.trim().replace(/^\+/, '') === c && Number(v) >= 0) return Number(v); }
+  return OTP_CAPS[c] != null ? OTP_CAPS[c] : 20;
+}
+function otpAdmin(s, rec) {
+  try { if (ADMINS().includes(rec.phone)) return true; } catch { return true; } // misconfigured admin list: fail closed
+  return !!(s.users && s.users[rec.uid] && s.users[rec.uid].admin);
+}
+function otpPrep(s, now) {
   if (!otpOn()) throw code('otp_unavailable');
-  s.otp = s.otp || { codes: {}, sends: {}, day: '', n: 0 };
-  const o = s.otp;
-  for (const k of Object.keys(o.codes)) if (o.codes[k].exp < now) delete o.codes[k];
-  for (const k of Object.keys(o.sends)) { o.sends[k] = o.sends[k].filter(t => now - t < HOUR); if (!o.sends[k].length) delete o.sends[k]; }
-  return o;
+  s.otpcodes = s.otpcodes || {}; s.otpsends = s.otpsends || {};
+  if (!s.otp) s.otp = { day: '', n: 0 };
+  for (const k of Object.keys(s.otpcodes)) if (s.otpcodes[k].exp < now) delete s.otpcodes[k];
+  for (const k of Object.keys(s.otpsends)) { const w = k.startsWith('c:') ? DAY : HOUR; s.otpsends[k] = s.otpsends[k].filter(t => now - t < w); if (!s.otpsends[k].length) delete s.otpsends[k]; }
+  return s;
 }
+// Counts one event under key k; true when the limit is already reached (the event is still counted).
+function otpHit(s, k, max, now) {
+  const a = s.otpsends[k] = s.otpsends[k] || [];
+  const over = a.length >= max; a.push(now); if (a.length > max + 5) a.splice(0, a.length - max - 5);
+  return over;
+}
+const otpKeys = (phone, ip) => ({ pk: otpMac('otpk:' + phone).slice(0, 24), ik: otpMac('otpi:' + (ip || '?')).slice(0, 24) });
 function otpSendCheck(s, phone, ip, now) {
-  const o = otpPrep(s, phone, ip, now);
-  if (!s.auth || !s.auth[phone]) return { skip: true }; // same reply for unknown numbers, nothing is sent
-  const pk = tokHash('otp:' + phone).slice(0, 24), ik = tokHash('ip:' + (ip || '?')).slice(0, 24);
+  otpPrep(s, now);
+  const { pk, ik } = otpKeys(phone, ip), rec = s.auth && s.auth[phone], cc = otpCountry(phone);
+  const c = String(crypto.randomInt(0, 1e6)).padStart(6, '0'), h = otpMac('otpcode:' + phone + ':' + c); // same work for every number
+  if (Object.keys(s.otpsends).length > OTP_MAX_KEYS) return { skip: true };
   const day = new Date(now).toISOString().slice(0, 10);
-  if (o.day !== day) { o.day = day; o.n = 0; }
-  if ((o.sends[pk] || []).length >= 3 || (o.sends[ik] || []).length >= 10 || o.n >= (Number(process.env.OTP_DAILY_CAP) || 200)) throw code('slow_down');
-  const c = String(crypto.randomInt(0, 1e6)).padStart(6, '0');
-  (o.sends[pk] = o.sends[pk] || []).push(now); (o.sends[ik] = o.sends[ik] || []).push(now); o.n++;
-  o.codes[pk] = { h: tokHash('otpcode:' + phone + ':' + c), exp: now + OTP_MS, tries: 0 };
-  return { code: c };
+  if (s.otp.day !== day) { s.otp.day = day; s.otp.n = 0; }
+  const slow = otpHit(s, 's:' + pk, 3, now) | otpHit(s, 'si:' + ik, 10, now); // both counted for every number
+  if (slow || !rec || !cc || otpAdmin(s, Object.assign({ phone }, rec))) return { skip: true };
+  const ck = 'c:' + cc;
+  if (s.otp.n >= otpCap() || (s.otpsends[ck] || []).length >= otpCountryCap(cc)) return { skip: true };
+  (s.otpsends[ck] = s.otpsends[ck] || []).push(now); s.otp.n++;
+  const old = s.otpcodes[pk]; // a new code replaces the old one but keeps its failed tries
+  s.otpcodes[pk] = { h, exp: now + OTP_MS, tries: old ? old.tries : 0 };
+  return { code: c, pk, h, cc };
 }
-function otpVerify(s, body, now) {
+function otpVerify(s, body, ip, now) {
   s.auth = s.auth || {}; s.sessions = s.sessions || {};
   const phone = normPhone(body.phone);
   if (!phone) throw code('bad_phone');
-  const o = otpPrep(s, phone, null, now), pk = tokHash('otp:' + phone).slice(0, 24), r = o.codes[pk], rec = s.auth[phone];
-  if (!r || !rec) throw code('bad_otp');
-  if (++r.tries > 5) { delete o.codes[pk]; throw code('bad_otp'); }
-  const h = tokHash('otpcode:' + phone + ':' + String(body.code || '').trim());
-  if (!crypto.timingSafeEqual(Buffer.from(h, 'hex'), Buffer.from(r.h, 'hex'))) throw code('bad_otp');
-  delete o.codes[pk];
+  otpPrep(s, now);
+  const { pk, ik } = otpKeys(phone, ip), r = s.otpcodes[pk], rec = s.auth[phone];
+  const slow = otpHit(s, 'v:' + pk, 10, now) | otpHit(s, 'vi:' + ik, 30, now);
+  const h = otpMac('otpcode:' + phone + ':' + String(body.code || '').trim()), want = r ? r.h : otpMac('otpcode:none');
+  const same = crypto.timingSafeEqual(Buffer.from(h, 'hex'), Buffer.from(want, 'hex'));
+  if (slow) throw code('slow_down');
+  if (!r || !rec || otpAdmin(s, Object.assign({ phone }, rec))) throw code('bad_otp');
+  if (++r.tries > 5 || !same) throw code('bad_otp');
+  delete s.otpcodes[pk];
   return { token: newSession(s, rec.uid, now) };
+}
+// The SMS goes out after the reply, so timing and body never reveal whether a number has an account.
+const otpPending = new Set();
+function otpAfter(p) {
+  p = p.catch(e => console.error('otp send failed:', e && e.code || e && e.message)); // server-side only, never returned
+  if (process.env.VERCEL) { try { require('@vercel/functions').waitUntil(p); } catch { /* falls back to a detached promise */ } }
+  otpPending.add(p); p.then(() => otpPending.delete(p));
+}
+async function otpDeliver(store, phone, x) {
+  try { await Sms.send(phone, 'DHK Predicts: your code is ' + x.code + '. It expires in 5 minutes. Do not share it with anyone.'); }
+  catch (e) { // a failed send leaves no usable code and gives the daily budget back
+    console.error('otp provider failed for ' + Sms.mask(phone) + ': ' + (e && (e.code || e.message)));
+    await store.transact(s => { const c = s.otpcodes && s.otpcodes[x.pk]; if (c && c.h === x.h) delete s.otpcodes[x.pk]; if (s.otp && s.otp.n > 0) s.otp.n--; const a = s.otpsends && s.otpsends['c:' + x.cc]; if (a && a.length) a.pop(); });
+  }
 }
 
 // Returns [status, body]. A failed login attempt still counts toward the limit,
@@ -198,14 +250,14 @@ async function handleApi(store, { method, name, body, token, ua, country, ip }) 
     if (name === 'otpsend') {
       if (method !== 'POST') throw code('use_post');
       const phone = normPhone(body.phone); if (!phone) throw code('bad_phone');
-      let sendCode = null;
-      const r = await store.transact(s => { Core.migrate(s); try { const x = otpSendCheck(s, phone, ip, now); sendCode = x.code || null; return [200, { ok: true }]; } catch (e) { if (!e.code) throw e; return [400, { error: e.code }]; } });
-      if (sendCode) { try { await Sms.send(phone, 'Your code: ' + sendCode + ' (valid 5 minutes)'); } catch (e) { return [400, { error: e.code || 'otp_send_failed' }]; } }
+      let x = null;
+      const r = await store.transact(s => { Core.migrate(s); try { x = otpSendCheck(s, phone, ip, now); return [200, { ok: true }]; } catch (e) { if (!e.code) throw e; return [400, { error: e.code }]; } });
+      if (x && x.code) otpAfter(otpDeliver(store, phone, x));
       return r;
     }
     if (name === 'otpverify') {
       if (method !== 'POST') throw code('use_post');
-      return await store.transact(s => { Core.migrate(s); try { return [200, otpVerify(s, body, now)]; } catch (e) { if (!e.code) throw e; return [400, { error: e.code }]; } });
+      return await store.transact(s => { Core.migrate(s); try { return [200, otpVerify(s, body, ip, now)]; } catch (e) { if (!e.code) throw e; return [400, { error: e.code }]; } });
     }
     if (name === 'logout') {
       if (token) await store.transact(s => { delete s.sessions[tokHash(token)]; });
@@ -276,6 +328,19 @@ function readBody(req) {
   });
 }
 
+// Client IP for rate limits. On Vercel use the platform's own header; elsewhere the socket address.
+// X-Forwarded-For is client-controlled, so it is ignored unless TRUST_PROXY=1 (one trusted proxy in front),
+// and then only the right-most hop (the one that proxy appended) is used.
+function clientIp(req) {
+  const h = req.headers || {}, one = v => String(Array.isArray(v) ? v[0] : v || '').trim();
+  let ip = '';
+  if (process.env.VERCEL) ip = one(h['x-real-ip']) || one(h['x-vercel-forwarded-for']).split(',')[0].trim();
+  else if (process.env.TRUST_PROXY === '1') ip = one(h['x-forwarded-for']).split(',').pop().trim();
+  if (!ip) ip = (req.socket && req.socket.remoteAddress) || '';
+  ip = ip.replace(/^::ffff:/, '');
+  return require('net').isIP(ip) ? ip : '';
+}
+
 // Node http adapter shared by server.js and api/index.js.
 async function serveApi(store, req, res) {
   const url = new URL(req.url, 'http://x');
@@ -286,10 +351,10 @@ async function serveApi(store, req, res) {
     method: req.method, name: url.pathname.replace(/^\/api\//, ''), body,
     token: (req.headers.authorization || '').replace(/^Bearer /, ''), ua: req.headers['user-agent'],
     country: req.headers['x-vercel-ip-country'] || null, // set by Vercel; absent locally
-    ip: String(req.headers['x-forwarded-for'] || (req.socket && req.socket.remoteAddress) || '').split(',')[0].trim()
+    ip: clientIp(req)
   });
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(out));
 }
 
-module.exports = { handleApi, serveApi, normPhone, ADMINS };
+module.exports = { handleApi, serveApi, normPhone, ADMINS, clientIp, otpIdle: () => Promise.all([...otpPending]) };
