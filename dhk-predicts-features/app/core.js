@@ -64,8 +64,8 @@
   function summary(m, now) {
     return {
       id: m.id, cat: m.cat, city: m.city, tz: m.tz, utcOffset: m.utcOffset, q: m.q, p: r2(pY(m) * 100) / 100, vol: Math.round(m.vol),
-      closes: m.closes, status: isOpen(m, now) ? 'open' : m.status === 'open' ? 'closed' : m.status,
-      outcome: m.outcome, proposal: m.proposal ? { out: m.proposal.out, until: m.proposal.until } : null, traders: m.traders, spark: m.hist.map(function (h) { return Math.round(h[1] * 100); })
+      closes: m.closes, status: isDue(m, now) ? 'resolved' : isOpen(m, now) ? 'open' : m.status === 'open' ? 'closed' : m.status,
+      outcome: isDue(m, now) ? m.proposal.out : m.outcome, proposal: m.proposal ? { out: m.proposal.out, until: m.proposal.until } : null, traders: m.traders, spark: m.hist.map(function (h) { return Math.round(h[1] * 100); })
     };
   }
 
@@ -279,9 +279,17 @@
       out.src = m.src; out.hist = m.hist; out.b = m.b; out.qy = m.qy; out.qn = m.qn;
       out.mine = uid && s.pos[uid] && s.pos[uid][m.id] ? s.pos[uid][m.id] : { y: 0, n: 0, spent: 0 };
       out.me = uid ? publicUser(s, uid, now) : null;
-      if (m.status === 'proposed') {
+      if (isDue(m, now)) {
+        // Window over, nothing open: it settles on the next write or the daily sweep. Show the result now.
+        var dp = uid && s.pos[uid] && s.pos[uid][m.id];
+        out.note = m.proposal.note; out.link = m.proposal.link; out.resolvedAt = m.proposal.until; out.review = null; out.settling = true;
+        out.holders = 0; out.totalPaid = 0; out.myPaid = null; out.myBook = dp && (dp.y || dp.n) ? { y: dp.y, n: dp.n, spent: dp.spent } : null;
+        out.canDispute = !!(out.myBook && !(m.disputes || []).some(function (d) { return d.uid === uid; }));
+        out.disputeUntil = now + DISPUTE_MS; out.tpl = m.tpl || null; out.disputes = (m.disputes || []).length; out.pending = null; out.myDispute = false;
+      } else if (m.status === 'proposed') {
         var hp = uid && s.pos[uid] && s.pos[uid][m.id];
-        out.proposal = { out: m.proposal.out, until: m.proposal.until, note: m.proposal.note, link: m.proposal.link };
+        out.proposal = { out: m.proposal.out, until: m.proposal.until, note: m.proposal.note, link: m.proposal.link, mine: m.proposal.by === uid, short: !!m.proposal.short };
+        out.overdue = now > m.proposal.until; out.pending = m.pending ? { to: m.pending.to } : null;
         out.disputes = (m.disputes || []).length;
         out.myDispute = !!(uid && (m.disputes || []).some(function (d) { return d.uid === uid; }));
         out.canDispute = !!(hp && (hp.y || hp.n) && now <= m.proposal.until && !out.myDispute);
@@ -412,12 +420,16 @@
     if (!uid || !s.users[uid].admin) throw err('forbidden');
     var disputes = [];
     s.markets.forEach(function (m) {
-      (m.disputes || []).forEach(function (d) { disputes.push({ id: m.id, q: m.q, outcome: m.outcome, name: d.name, reason: d.reason, link: d.link, at: d.at, closed: !!d.closed,
+      (m.disputes || []).concat(m.disputeLog || []).forEach(function (d) { disputes.push({ id: m.id, q: m.q, outcome: m.outcome || (m.proposal && m.proposal.out), name: d.name, reason: d.reason, link: d.link, at: d.at, closed: !!d.closed || !!d.retractedAt, retracted: !!d.retractedAt,
         pending: m.pending ? { to: m.pending.to, by: s.users[m.pending.by] ? s.users[m.pending.by].name : '—', mine: m.pending.by === uid } : null }); });
     });
     var proposed = s.markets.filter(function (m) { return m.status === 'proposed'; }).map(function (m) {
-      return { id: m.id, q: m.q, out: m.proposal.out, until: m.proposal.until, disputes: (m.disputes || []).length, mine: m.proposal.by === uid, soon: m.proposal.until - now <= 6 * 36e5 };
+      var pr = m.proposal, od = now > pr.until, open = openDisputes(m);
+      return { id: m.id, q: m.q, out: pr.out, until: pr.until, disputes: (m.disputes || []).length, open: open, mine: pr.by === uid, short: !!pr.short,
+        overdue: od, soon: !od && pr.until - now <= 6 * 36e5, needs: open ? 'review' : pr.short ? 'approval' : od ? 'settle' : null };
     });
+    // Most urgent first: overdue, then the soonest deadline.
+    proposed.sort(function (x, y) { return (y.overdue - x.overdue) || (x.until - y.until); });
     return { me: publicUser(s, uid, now), proposed: proposed, feedback: (s.feedback || []).slice(-100).reverse(), disputes: disputes.reverse(), audit: (s.audit || []).slice(-50).reverse() };
   };
 
@@ -485,26 +497,23 @@
       if (!s.users[uid].admin) throw err('forbidden');
       var m = findMarket(s, a.id), out;
       if (m.status === 'proposed') {
-        // Settle the proposed outcome once its dispute window is over (or early, on purpose).
-        if (now < m.proposal.until && !a.early) throw err('window_open');
-        out = m.proposal.out;
-        if (a.note == null) a.note = m.proposal.note;
-        if (a.link == null) a.link = m.proposal.link;
+        // Settle the proposed outcome once its dispute window is over (or early, on purpose, by a different admin).
+        var pr = m.proposal;
+        if (now < pr.until) {
+          if (!a.early) throw err('window_open');
+          if (pr.by === uid) throw err('same_admin');
+        }
+        if (pr.short && pr.by === uid) throw err('same_admin'); // a window under 1h needs a second admin
+        if (openDisputes(m)) throw err('has_disputes');
+        out = pr.out;
+        if (a.note == null) a.note = pr.note;
+        if (a.link == null) a.link = pr.link;
       } else {
         if (m.status !== 'open') throw err('closed');
         out = own(OUTCOMES, a.outcome);
       }
       if (!out) throw err('bad_outcome');
-      // Snapshot every holder before paying, so a dispute can re-settle exactly.
-      m.book = {};
-      Object.keys(s.pos).forEach(function (id) {
-        var p = s.pos[id][m.id]; if (!p || (!p.y && !p.n)) return;
-        m.book[id] = { y: p.y, n: p.n, spent: p.spent, net: p.net != null ? p.net : p.spent };
-        p.y = 0; p.n = 0;
-      });
-      m.status = 'resolved'; m.resolvedAt = now; m.resolvedBy = uid;
-      m.note = String(a.note || '').slice(0, 200); m.link = safeLink(a.link);
-      settle(s, m, out, uid, now);
+      finalize(s, m, out, uid, a.note, a.link, now);
       return { ok: true };
     },
     // Step 1 of settling: stop trading and publish the intended outcome. No points move yet.
@@ -513,11 +522,11 @@
       var m = findMarket(s, a.id), out = own(OUTCOMES, a.outcome);
       if (m.status !== 'open') throw err('closed');
       if (!out) throw err('bad_outcome');
-      var hours = Number(a.hours == null ? 24 : a.hours);
-      if (!(hours >= 0 && hours <= 72)) throw err('bad_window');
+      var hours = a.hours == null ? 24 : typeof a.hours === 'number' ? a.hours : typeof a.hours === 'string' && a.hours.trim() !== '' ? Number(a.hours) : NaN;
+      if (!(hours >= 0 && hours <= 72) || (hours > 0 && hours < 0.25)) throw err('bad_window'); // blank, text, or a sliver of a second is not a window
       m.status = 'proposed'; m.closes = Math.min(m.closes, now);
-      m.proposal = { out: out, note: String(a.note || '').slice(0, 200), link: safeLink(a.link), at: now, by: uid, until: now + hours * 3600e3 };
-      m.disputes = [];
+      m.proposal = { out: out, note: String(a.note || '').slice(0, 200), link: safeLink(a.link), at: now, by: uid, until: now + hours * 3600e3, short: hours < 1 };
+      m.disputes = []; m.pending = null;
       return { ok: true, until: m.proposal.until };
     },
     // Withdraw a proposal (e.g. a dispute was right). Trading stays closed.
@@ -525,7 +534,12 @@
       if (!s.users[uid].admin) throw err('forbidden');
       var m = findMarket(s, a.id);
       if (m.status !== 'proposed') throw err('no_proposal');
-      m.status = 'open'; m.proposal = null; m.disputes = [];
+      // Disputes are archived, not wiped: they stay readable in the admin inbox and the audit log says how many.
+      if ((m.disputes || []).length) {
+        m.disputeLog = (m.disputeLog || []).concat(m.disputes.map(function (d) { var c = {}; for (var k in d) c[k] = d[k]; c.retractedAt = now; return c; }));
+        audit(s, uid, 'retract_disputes', { market: m.id, n: m.disputes.length }, now);
+      }
+      m.status = 'open'; m.proposal = null; m.disputes = []; m.pending = null;
       return { ok: true };
     },
     // Anyone who held shares can dispute within 48 hours of settlement.
@@ -553,15 +567,17 @@
     review: function (s, uid, a, now) {
       if (!s.users[uid].admin) throw err('forbidden');
       var m = findMarket(s, a.id);
-      if (m.status !== 'resolved' || !m.disputes || !m.disputes.length) throw err('no_dispute');
-      var to = a.decision === 'keep' ? m.outcome : own(OUTCOMES, a.decision);
+      var prop = m.status === 'proposed';
+      if ((m.status !== 'resolved' && !prop) || !m.disputes || !m.disputes.length) throw err('no_dispute');
+      var cur = prop ? m.proposal.out : m.outcome;
+      var to = a.decision === 'keep' ? cur : own(OUTCOMES, a.decision);
       if (!to) throw err('bad_outcome');
       var note = String(a.note || '').slice(0, 200);
-      if (to === m.outcome) {
+      if (to === cur) {
         m.pending = null;
-        m.review = { by: [uid], at: now, from: m.outcome, to: to, changed: false, note: note };
+        m.review = { by: [uid], at: now, from: cur, to: to, changed: false, note: note };
         m.disputes.forEach(function (d) { if (!d.closed) d.closed = now; });
-        return { ok: true, outcome: m.outcome };
+        return { ok: true, outcome: cur };
       }
       m.pending = { by: uid, to: to, at: now, note: note };
       return { ok: true, pending: true };
@@ -573,11 +589,12 @@
       if (pd.by === uid) throw err('same_admin');
       m.pending = null;
       if (a.accept === false) return { ok: true, rejected: true };
-      var from = m.outcome;
-      settle(s, m, pd.to, uid, now);
+      var from = m.status === 'proposed' ? m.proposal.out : m.outcome;
+      if (m.status === 'proposed') m.proposal.out = pd.to; // still in the window: change the proposal, points move later
+      else settle(s, m, pd.to, uid, now);
       m.review = { by: [pd.by, uid], at: now, from: from, to: pd.to, changed: true, note: pd.note };
       m.disputes.forEach(function (d) { if (!d.closed) d.closed = now; });
-      return { ok: true, outcome: m.outcome };
+      return { ok: true, outcome: m.status === 'proposed' ? m.proposal.out : m.outcome };
     },
     create: function (s, uid, a, now) {
       if (!s.users[uid].admin) throw err('forbidden');
@@ -705,7 +722,7 @@
     ONDELETE.forEach(function (f) { f(s, uid, now); });
     s.users[uid] = { id: uid, name: '—', pts: 0, deleted: now, created: u.created };
     s.feedback = (s.feedback || []).filter(function (f) { return f.uid !== uid; });
-    s.markets.forEach(function (m) { (m.disputes || []).forEach(function (d) { if (d.uid === uid) { d.name = '—'; d.reason = ''; d.link = ''; } }); });
+    s.markets.forEach(function (m) { (m.disputes || []).concat(m.disputeLog || []).forEach(function (d) { if (d.uid === uid) { d.name = '—'; d.reason = ''; d.link = ''; } }); });
     (s.audit || []).forEach(function (x) { if (x.by === uid) x.name = '—'; });
     Object.keys(s.devices || {}).forEach(function (d) { s.devices[d] = s.devices[d].filter(function (id) { return id !== uid; }); if (!s.devices[d].length) delete s.devices[d]; });
   }
@@ -741,6 +758,32 @@
     });
     m.outcome = out;
   }
+  function openDisputes(m) { return (m.disputes || []).filter(function (d) { return !d.closed; }).length; }
+  // A proposal whose window has ended, with no open dispute and no second-admin requirement, settles by itself.
+  function isDue(m, now) { return m.status === 'proposed' && !!m.proposal && !m.proposal.short && now > m.proposal.until && !openDisputes(m); }
+  // The one settle path for an admin resolve and for the automatic sweep.
+  function finalize(s, m, out, by, note, link, now) {
+    // Snapshot every holder before paying, so a dispute can re-settle exactly.
+    m.book = {};
+    Object.keys(s.pos).forEach(function (id) {
+      var p = s.pos[id][m.id]; if (!p || (!p.y && !p.n)) return;
+      m.book[id] = { y: p.y, n: p.n, spent: p.spent, net: p.net != null ? p.net : p.spent };
+      p.y = 0; p.n = 0;
+    });
+    m.status = 'resolved'; m.resolvedAt = now; m.resolvedBy = by;
+    m.note = String(note || '').slice(0, 200); m.link = safeLink(link);
+    settle(s, m, out, by, now);
+  }
+  function sweep(s, now) {
+    var n = 0;
+    s.markets.forEach(function (m) {
+      if (!isDue(m, now)) return;
+      n++;
+      finalize(s, m, m.proposal.out, 'system', m.proposal.note, m.proposal.link, now);
+      audit(s, 'system', 'autosettle', { market: m.id, outcome: m.outcome, until: m.proposal.until }, now);
+    });
+    return n;
+  }
   function credit(u, amt) {
     var r = Math.min(u.debt || 0, amt);
     if (r > 0) u.debt -= r;
@@ -752,12 +795,13 @@
   var ADMIN_ACTIONS = { adjust: 1, propose: 1, retract: 1, resolve: 1, review: 1, confirm: 1, open: 1, fbstatus: 1, create: 1, city: 1, signup: 1, sponsor: 1 };
   function audit(s, uid, name, a, now) {
     s.audit = s.audit || [];
-    s.audit.push({ at: now, by: uid, name: s.users[uid].name, action: name, args: JSON.parse(JSON.stringify(a)) });
+    s.audit.push({ at: now, by: uid, name: s.users[uid] ? s.users[uid].name : String(uid), action: name, args: JSON.parse(JSON.stringify(a)) });
     if (s.audit.length > 5000) s.audit.shift();
   }
 
   // Extension points for add-on modules (social.js).
   var BEFORE = [], AFTER = {}, ONDELETE = [];
+  BEFORE.push(function (s, uid, name, a, now) { sweep(s, now); }); // lazy settle of expired, undisputed proposals
   function extend(kind, name, fn) { if (own(READS, name) || own(WRITES, name)) throw err('dup_action'); (kind === 'read' ? READS : WRITES)[name] = fn; }
 
   function act(state, uid, name, args, now) {
@@ -784,7 +828,7 @@
 
   var Core = {
     seed: seed, act: act, migrate: migrate, localDay: localDay, track: track, deleteUser: deleteUser, addUser: addUser, isWrite: function (n) { return !!own(WRITES, n); },
-    audit: audit, extend: extend, beforeWrite: function (f) { BEFORE.push(f); }, afterWrite: function (n, f) { (AFTER[n] = AFTER[n] || []).push(f); },
+    audit: audit, sweep: sweep, extend: extend, beforeWrite: function (f) { BEFORE.push(f); }, afterWrite: function (n, f) { (AFTER[n] = AFTER[n] || []).push(f); },
     onDelete: function (f) { ONDELETE.push(f); }, err: err, worth: worth, siteDay: siteDay,
     sharesFor: sharesFor, proceedsFor: proceedsFor, priceYes: priceYes, START_POINTS: START_POINTS, DAILY_BONUS: DAILY_BONUS
   };

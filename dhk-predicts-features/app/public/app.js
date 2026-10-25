@@ -54,6 +54,7 @@
       streak_now: 'টানা {n} দিন', streak_best: 'সেরা: {n} দিন', streak_none: 'আজকের ১০০ পয়েন্ট নিলে ধারা শুরু হবে',
       streak_wait: 'আগামীকাল ফিরে এসে ১০০ পয়েন্ট নিলে ধারা শুরু হবে',
       soon: 'শীঘ্রই শেষ', admin_one: 'মাত্র {n}টি অ্যাডমিন নম্বর দেওয়া আছে। ADMIN_PHONES-এ দ্বিতীয় নম্বর যোগ করুন, না হলে সংশোধন অনুমোদন করা যাবে না।', audit_csv: 'অডিট লগ CSV নামান',
+      overdue: 'সময় পেরিয়েছে', need_review: 'আপত্তি দেখতে হবে', need_approval: 'দ্বিতীয় অ্যাডমিন দরকার', need_settle: 'নিজে থেকেই নিষ্পত্তি হবে', early_confirm: 'আপত্তির সময় শেষ হওয়ার আগেই নিষ্পত্তি করবেন?',
       reset_title: 'খেলোয়াড়ের পাসওয়ার্ড রিসেট', reset_phone: 'খেলোয়াড়ের নম্বর', reset_make: 'কোড বানান', reset_code: 'এই কোডটি খেলোয়াড়কে দিন। একবারই কাজ করবে, {m} মিনিট: {c}',
       forgot: 'পাসওয়ার্ড ভুলে গেছেন?', otp_login: 'এসএমএস কোড দিয়ে লগইন', otp_send: 'কোড পাঠান', otp_code: 'কোড', otp_verify: 'লগইন', otp_sent: 'এই নম্বরে অ্যাকাউন্ট থাকলে একটি কোড পাঠানো হয়েছে।', reset_have: 'রিসেট কোড', reset_new: 'নতুন পাসওয়ার্ড', reset_do: 'নতুন পাসওয়ার্ড দিন', back_login: 'লগইনে ফিরুন',
       sp_title: 'স্পনসর লাইন', sp_en: 'লেখা (ইংরেজি)', sp_bn: 'লেখা (বাংলা)', sp_url: 'লিংক (https://...)', sp_save: 'সংরক্ষণ', sp_tag: 'স্পনসর',
@@ -69,7 +70,8 @@
       daily: 'দৈনিক বাজার খুলুন', template: 'ধরন', threshold: 'সীমা', settle_day: 'নিষ্পত্তির দিন', repeat: 'আবার খুলুন', adj_notice: 'অ্যাডমিন আপনার পয়েন্ট {p} বদলেছেন: {r}',
       money: 'টাকা-ডলার', closes_at: 'শেষ {d}, {t}',
       e_not_available: 'এই বেটা এখনো আপনার দেশে চালু হয়নি।', e_same_admin: 'নিজের প্রস্তাব নিজে অনুমোদন করা যায় না', e_no_pending: 'অনুমোদনের কিছু নেই', e_window_open: 'আপত্তির সময় এখনো চলছে',
-      e_no_proposal: 'কোনো প্রস্তাব নেই', e_bad_template: 'ধরন বেছে নিন', e_bad_threshold: 'সীমা সংখ্যায় দিন', e_exists: 'এই বাজার আগেই খোলা হয়েছে', e_no_user: 'খেলোয়াড় পাওয়া যায়নি', e_unknown: 'কিছু একটা ভুল হয়েছে', e_bad_window: 'আপত্তির সময় ০–৭২ ঘণ্টা',
+      e_no_proposal: 'কোনো প্রস্তাব নেই', e_bad_template: 'ধরন বেছে নিন', e_bad_threshold: 'সীমা সংখ্যায় দিন', e_exists: 'এই বাজার আগেই খোলা হয়েছে', e_no_user: 'খেলোয়াড় পাওয়া যায়নি', e_unknown: 'কিছু একটা ভুল হয়েছে', e_bad_window: 'আপত্তির সময় ০, অথবা ১৫ মিনিট থেকে ৭২ ঘণ্টা',
+      e_has_disputes: 'খোলা আপত্তি আছে। আগে সেগুলো দেখুন', e_bad_city: 'শহর বেছে নিন', e_bad_json: 'অনুরোধটি পড়া যায়নি', e_bad_outcome: 'ফলাফল বেছে নিন', e_dup_action: 'কিছু একটা ভুল হয়েছে', e_login: 'আগে লগইন করুন', e_no_dispute: 'দেখার মতো কোনো আপত্তি নেই', e_no_market: 'বেটা পাওয়া যায়নি', e_no_shares: 'এতগুলো শেয়ার আপনার নেই', e_not_resolved: 'বেটাটির ফলাফল এখনো ঠিক হয়নি', e_too_large: 'অনুরোধটি অনেক বড়', e_try_again: 'একটু পরে আবার চেষ্টা করুন', e_use_post: 'কিছু একটা ভুল হয়েছে',
       footer: 'বিনামূল্যে খেলুন। কোনো টাকা নেই, কোনো পুরস্কার নেই। পয়েন্ট কেনা যায় না, ভাঙানো যায় না। শুধু ১৮+।', privacy: 'গোপনীয়তা নীতি',
       adult_box: 'আমার বয়স ১৮ বছর বা তার বেশি', consent_box: 'আমি গোপনীয়তা নীতি পড়েছি এবং আমার তথ্য ব্যবহারে সম্মতি দিচ্ছি',
       priv_short: 'আমরা শুধু আপনার নাম, মোবাইল নম্বর ও পাসওয়ার্ড (গোপন করে) রাখি, আর খেলার হিসাব। খেলা চালানো ও একজনের একটি অ্যাকাউন্ট নিশ্চিত করতে এগুলো লাগে। তথ্য থাকে Supabase (মুম্বাই, ভারত) ও Vercel-এ। সেটিংস থেকে যেকোনো সময় দেখা, ঠিক করা বা মুছে ফেলা যায়।',
@@ -123,6 +125,7 @@
       streak_now: '{n}-day streak', streak_best: 'Best: {n} days', streak_none: 'Take today\'s 100 points to start a streak',
       streak_wait: 'Come back tomorrow and take your 100 points to start a streak',
       soon: 'Due soon', admin_one: 'Only {n} admin number is set. Add a second one in ADMIN_PHONES, or corrections cannot be approved.', audit_csv: 'Download audit log CSV',
+      overdue: 'Overdue', need_review: 'Needs review', need_approval: 'Needs a second admin', need_settle: 'Settles automatically', early_confirm: 'Settle now, before the dispute window ends?',
       reset_title: 'Reset a player\'s password', reset_phone: 'Player\'s number', reset_make: 'Make code', reset_code: 'Give this code to the player. It works once, for {m} minutes: {c}',
       forgot: 'Forgot your password?', otp_login: 'Log in with an SMS code', otp_send: 'Send code', otp_code: 'Code', otp_verify: 'Log in', otp_sent: 'If that number has an account, a code was sent.', reset_have: 'Reset code', reset_new: 'New password', reset_do: 'Set new password', back_login: 'Back to log in',
       sp_title: 'Sponsor line', sp_en: 'Text (English)', sp_bn: 'Text (Bangla)', sp_url: 'Link (https://...)', sp_save: 'Save', sp_tag: 'Sponsored',
@@ -138,7 +141,8 @@
       daily: 'Open a daily market', template: 'Template', threshold: 'Threshold', settle_day: 'Settlement day', repeat: 'Repeat', adj_notice: 'An admin changed your points by {p}: {r}',
       money: 'Money', closes_at: 'Closes {d}, {t}',
       e_not_available: 'This beta is not available in your country yet.', e_same_admin: "You can't approve your own proposal", e_no_pending: 'Nothing to approve', e_window_open: 'The dispute window is still open',
-      e_no_proposal: 'No proposal to retract', e_bad_template: 'Pick a template', e_bad_threshold: 'Threshold must be a number', e_exists: 'That market is already open', e_no_user: 'Player not found', e_unknown: 'Something went wrong', e_bad_window: 'Dispute window must be 0 to 72 hours',
+      e_no_proposal: 'No proposal to retract', e_bad_template: 'Pick a template', e_bad_threshold: 'Threshold must be a number', e_exists: 'That market is already open', e_no_user: 'Player not found', e_unknown: 'Something went wrong', e_bad_window: 'Dispute window must be 0, or between 15 minutes and 72 hours',
+      e_has_disputes: 'There are open disputes. Review them first', e_bad_city: 'Pick a city', e_bad_json: 'That request could not be read', e_bad_outcome: 'Pick a result', e_dup_action: 'Something went wrong', e_login: 'Please log in first', e_no_dispute: 'No dispute to review', e_no_market: 'Market not found', e_no_shares: "You don't have that many shares", e_not_resolved: 'This market is not settled yet', e_too_large: 'That request is too large', e_try_again: 'Please try again in a moment', e_use_post: 'Something went wrong',
       footer: "Free to play. No money, no prizes. Points can't be bought or cashed out. 18+ only.", privacy: 'Privacy notice',
       adult_box: 'I am 18 or older', consent_box: 'I have read the privacy notice and agree to my data being used as it describes',
       priv_short: 'We keep only your name, mobile number and password (scrambled), plus your game record. We need them to run the game and make sure each person has one account. Data is stored with Supabase (Mumbai, India) and Vercel. You can see, correct or delete it any time in settings.',
@@ -234,6 +238,8 @@
   // Dates and times show in the player's own timezone (the phone's clock), per the design review.
   function date(ms) { var d = new Date(ms); return dig(d.getDate()) + ' ' + MON[lang][d.getMonth()] + ' ' + dig(d.getFullYear()); }
   function clock(ms) { var d = new Date(ms), h = d.getHours(), m = d.getMinutes(); return dig((h % 12 || 12) + ':' + (m < 10 ? '0' : '') + m) + (lang === 'bn' ? (h < 12 ? ' এএম' : ' পিএম') : (h < 12 ? ' am' : ' pm')); }
+  // Short timezone name for the viewer's clock (e.g. GMT+6, BST), so a deadline is never ambiguous.
+  function tzl(ms) { try { var p = new Intl.DateTimeFormat('en', { timeZoneName: 'short' }).formatToParts(new Date(ms)).filter(function (x) { return x.type === 'timeZoneName'; })[0]; return p ? ' ' + p.value : ''; } catch (e) { return ''; } }
   function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); }
   function tx(o) { return esc(o[lang] || o.en); }
 
@@ -418,11 +424,12 @@
     var pr = m.proposal, h = '<div class="card"><h3>' + t('proposed') + '</h3><b style="font-size:28px;line-height:1.1;color:var(--' + ocolor(pr.out) + ')">' + oname(pr.out) + '</b>';
     if (pr.note) h += '<div class="row"><span class="muted">' + t('res_value') + '</span><b>' + esc(pr.note) + '</b></div>';
     if (pr.link) h += '<a class="small" href="' + esc(pr.link) + '" target="_blank" rel="noopener">' + esc(pr.link) + '</a>';
-    h += '<p class="small" style="margin:0">' + t('proposed_line', { d: date(pr.until) + ', ' + clock(pr.until) }) + '</p>';
+    h += '<p class="small" style="margin:0">' + t('proposed_line', { d: date(pr.until) + ', ' + clock(pr.until) + tzl(pr.until) }) + '</p>';
     if (m.disputes) h += '<p class="small muted" style="margin:0">' + t('dispute_open', { n: dig(m.disputes) }) + '</p>';
     if (m.myDispute) h += '<p class="small muted" style="margin:0">' + t('you_disputed') + '</p>';
     if (m.canDispute) h += disputeForm(m);
-    if (me && me.admin) h += '<div class="sides"><button class="ghost" type="button" data-final="1">' + t('settle_now') + '</button><button class="ghost" type="button" data-retract="1">' + t('retract') + '</button></div>';
+    var early = Date.now() < pr.until, canNow = me && me.admin && !m.disputes && !(pr.mine && (early || pr.short));
+    if (me && me.admin) h += '<div class="sides">' + (canNow ? '<button class="ghost" type="button" data-final="' + (early ? 'early' : '1') + '">' + t('settle_now') + '</button>' : '') + '<button class="ghost" type="button" data-retract="1">' + t('retract') + '</button></div>';
     return h + '</div>';
   }
   function resultCard(m) {
@@ -584,7 +591,7 @@
         }).join('') + '<div class="muted">' + esc(Object.keys(k.events).map(function (e) { return e + ' ' + k.events[e]; }).join(' · ')) + '</div>' +
         (k.deviceFlags.length ? '<div><b>' + t('m_flags') + ':</b> ' + k.deviceFlags.map(function (g) { return esc(g.join(', ')); }).join(' | ') + '</div>' : '') + '</div>' + retention(k) + '</details>';
       var ph = d.proposed.length ? '<div class="card"><h3>' + t('proposed') + '</h3><div class="list">' + d.proposed.map(function (x) {
-        return '<div class="row"><a href="#m-' + x.id + '">' + tx(x.q) + '</a><span class="small">' + oname(x.out) + ' · ' + date(x.until) + ', ' + clock(x.until) + (x.disputes ? ' · ' + t('disputes') + ' ' + dig(x.disputes) : '') + (x.soon ? ' <span class="tag">' + t('soon') + '</span>' : '') + '</span></div>';
+        return '<div class="row"><a href="#m-' + x.id + '">' + tx(x.q) + '</a><span class="small">' + oname(x.out) + ' · ' + date(x.until) + ', ' + clock(x.until) + tzl(x.until) + (x.disputes ? ' · ' + t('disputes') + ' ' + dig(x.disputes) : '') + (x.overdue ? ' <span class="tag" style="background:var(--no);color:#fff">' + t('overdue') + '</span>' : x.soon ? ' <span class="tag">' + t('soon') + '</span>' : '') + (x.needs ? ' <span class="tag">' + t('need_' + x.needs) + '</span>' : '') + '</span></div>';
       }).join('') + '</div></div>' : '';
       var tpls = d.templates || {};
       var dh = '<details class="card"><summary>' + t('daily') + '</summary><form id="openq" style="display:flex;flex-direction:column;gap:8px;padding-top:8px">' +
@@ -757,7 +764,7 @@
     if (el.id === 'help') { $('#fb').hidden = false; $('#fbtext').focus(); return; }
     if (el.id === 'fbclose') { $('#fb').hidden = true; return; }
     if (d.confirm) return api('confirm', { id: d.mid, accept: d.confirm === '1' }).then(function () { toast(t('settled')); render(true); }, fail);
-    if (d.final) return api('resolve', { id: V._m.id }).then(function () { toast(t('settled')); render(true); }, fail);
+    if (d.final) return (d.final === 'early' && !confirm(t('early_confirm')) ? Promise.resolve() : api('resolve', d.final === 'early' ? { id: V._m.id, early: true } : { id: V._m.id }).then(function () { toast(t('settled')); render(true); }, fail));
     if (d.retract) return api('retract', { id: V._m.id }).then(function () { render(true); }, fail);
     if (d.repeat) { location.hash = 'admin'; return; }
     if (d.settle) return api(+$('#rwin').value > 0 ? 'propose' : 'resolve', +$('#rwin').value > 0 ? { id: V._m.id, outcome: d.settle, note: $('#rnote').value, link: $('#rlink').value, hours: +$('#rwin').value } : { id: V._m.id, outcome: d.settle, note: $('#rnote').value, link: $('#rlink').value }).then(function () { toast(t('settled')); render(true); }, fail);
