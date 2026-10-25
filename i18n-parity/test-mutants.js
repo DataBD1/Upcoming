@@ -50,6 +50,8 @@ const MUT = [
   ['placeholder missing in en', rep("{s} points, {w} people", "{s} points, people"), 1, /placeholders differ: est/],
   ['placeholder missing in bn (other direction)', rep("{s} পয়েন্ট, {w} জন", "{s} পয়েন্ট, জন"), 1, /placeholders differ: est/],
   ['placeholder repeated count differs', rep("{s} points, {w} people", "{s} points, {w} {w} people"), 1, /placeholders differ: est/],
+  ['t(prefix + x) with matching keys passes', s => rep("t('top');", "t('top'); t('e_bad_' + 'x');")(s), 0],
+  ['t(prefix + x) with no matching key fails', rep("t('top');", "t('top'); t('zzz_' + 'x');"), 1, /any key starting with zzz_/],
   ['t() key defined nowhere', rep("t('top');", "t('top'); t('nope_key');"), 1, /nope_key/],
   ['t("key") double quoted, defined only in en', s => rep("t('top');", "t('top'); t(\"only_en\");")(rep("top: 'Top',", "top: 'Top', only_en: 'x',")(s)), 1, /only_en/],
   ['duplicate key with different text (en)', rep("close: 'Close',", "close: 'Close', close: 'WRONG',"), 1, /duplicate key in en: close.*DIFFERENT/],

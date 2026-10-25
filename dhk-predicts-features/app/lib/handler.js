@@ -90,12 +90,14 @@ function auth(state, body, now, country) {
     const dev = String(body.device || '').slice(0, 64);
     if (dev) { const k = tokHash('dev:' + dev).slice(0, 24); state.devices = state.devices || {}; (state.devices[k] = state.devices[k] || []).push(uid); }
     Core.track(state, 'signup', uid, null, now);
+    if (extra.admin) Core.audit(state, uid, 'login', { mode: 'signup' }, now);
     return { token: newSession(state, uid, now) };
   }
   // Same error and the same scrypt work whether or not the number has an account, so login doesn't reveal who plays.
   const h = crypto.scryptSync(pin, rec ? rec.salt : DUMMY_SALT, 32).toString('hex');
   if (!rec || !crypto.timingSafeEqual(Buffer.from(h, 'hex'), Buffer.from(rec.hash, 'hex'))) throw code('wrong_login');
   clearAttempts(state, phone);
+  if (state.users[rec.uid] && state.users[rec.uid].admin) Core.audit(state, rec.uid, 'login', { mode: 'login' }, now);
   return { token: newSession(state, rec.uid, now) };
 }
 
@@ -235,9 +237,10 @@ async function handleApi(store, { method, name, body, token, ua, country, ip }) 
             if (!np) throw code('bad_phone');
             if (s.auth[np]) throw code('phone_taken');
             s.auth[np] = rec; delete s.auth[phone];
-            if (s.users[uid].admin && !ADMINS().includes(np)) delete s.users[uid].admin;
+            if (s.users[uid].admin) { const demoted = !ADMINS().includes(np); Core.audit(s, uid, 'chphone', { user: uid, demoted }, now); if (demoted) delete s.users[uid].admin; }
             return [200, { ok: true }];
           }
+          if (s.users[uid].admin) Core.audit(s, uid, 'delete', { user: uid }, now);
           delete s.auth[phone];
           if (s.attempts) delete s.attempts[phone];
           for (const k of Object.keys(s.sessions)) if (sessUid(s.sessions[k], now) === uid || (Array.isArray(s.sessions[k]) && s.sessions[k][0] === uid)) delete s.sessions[k];

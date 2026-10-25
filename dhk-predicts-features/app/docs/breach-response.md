@@ -22,4 +22,4 @@ SK (owner of GitHub, Vercel, Supabase). Agents: code only, no database or dashbo
 5. **Fix and record**: root cause, fix shipped through the normal release flow (operations.md), and an entry in risk/risk-register.md.
 
 ## Prevention already in place
-Hashed passwords and tokens, login rate limit, no NID collected (A31), account deletion removes name/phone/email, no `.env` or data files in the repo, the site is unlisted during the beta, every admin action is in the audit log, and the backups are private.
+Hashed passwords and tokens, login rate limit, no NID collected (A31), account deletion removes name/phone/email, no `.env` or data files in the repo, the site is unlisted during the beta, the admin actions listed in core.js ADMIN_ACTIONS plus admin sign-in, rename, phone change and own-account deletion are in the audit log (failed or denied admin attempts are not; the log keeps the newest 5000 entries and the CSV export says how many older ones were dropped), and the backups are private.

@@ -253,8 +253,9 @@ function checkSections(src, marker, a, b, out) {
 
 // Keys used in source as t('key') / t("key"); error codes as code('x') / err('x').
 function usedKeys(src) {
-  const s = stripComments(src, scan(src)), out = new Map(), re = /(?<![\w$.])t\(\s*(['"])([^'"\n\\]+)\1/g;
-  for (let m; (m = re.exec(s));) if (!out.has(m[2])) out.set(m[2], lineOf(s, m.index));
+  // t('prefix_' + x) builds a key at run time: record it as 'prefix_*' and require at least one defined key with that prefix.
+  const s = stripComments(src, scan(src)), out = new Map(), re = /(?<![\w$.])t\(\s*(['"])([^'"\n\\]+)\1(\s*\+)?/g;
+  for (let m; (m = re.exec(s));) { const k = m[3] ? m[2] + '*' : m[2]; if (!out.has(k)) out.set(k, lineOf(s, m.index)); }
   return out;
 }
 function usedCodes(src) {
@@ -272,8 +273,9 @@ function report(src, marker, a, b, opts) {
   const maps = checkDicts(root, a, b, opts, out);
   for (const f of opts.used) {
     for (const [k, line] of usedKeys(f.text)) {
-      const miss = [a, b].filter(l => !maps[l].has(k));
-      if (miss.length) out.problems.push('key used in ' + f.name + ':' + line + ' but not defined in ' + miss.join(' and ') + ': ' + k);
+      const pre = k.endsWith('*') ? k.slice(0, -1) : null;
+      const miss = [a, b].filter(l => pre === null ? !maps[l].has(k) : ![...maps[l].keys()].some(x => x.startsWith(pre)));
+      if (miss.length) out.problems.push('key used in ' + f.name + ':' + line + ' but not defined in ' + miss.join(' and ') + ': ' + (pre === null ? k : 'any key starting with ' + pre));
     }
   }
   for (const f of opts.codes) {

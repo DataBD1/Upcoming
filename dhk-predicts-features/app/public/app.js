@@ -253,6 +253,16 @@
       Core.addUser(local, 'me', lang === 'bn' ? 'আপনি' : 'You', Date.now(), { admin: true });
     }
   }
+  // Response cache for offline reading: public reads only, and only while logged out. Anything that
+  // depends on the token (me, inbox, auditall, metrics, users, account, social...) is never stored.
+  var PUBLIC_READS = { home: 1, market: 1, leaders: 1 };
+  function clearCaches() {
+    try {
+      var ks = [], i, k;
+      for (i = 0; i < localStorage.length; i++) { k = localStorage.key(i); if (k && k.indexOf('dp-c:') === 0) ks.push(k); }
+      ks.forEach(function (x) { localStorage.removeItem(x); });
+    } catch (e) {}
+  }
   function api(name, args) {
     if (LOCAL) {
       return new Promise(function (ok, bad) {
@@ -264,20 +274,20 @@
         catch (e) { bad(e); }
       });
     }
-    var write = name === 'auth' || name === 'chphone' || name === 'delete' || name === 'logout' || name === 'gcreate' || name === 'gjoin' || name === 'gleave' || name === 'resetpw' || name === 'usereset' || name === 'otpsend' || name === 'otpverify' || Core.isWrite(name), key = 'dp-c:' + name + ':' + JSON.stringify(args || {});
+    var write = name === 'auth' || name === 'chphone' || name === 'delete' || name === 'logout' || name === 'gcreate' || name === 'gjoin' || name === 'gleave' || name === 'resetpw' || name === 'usereset' || name === 'otpsend' || name === 'otpverify' || Core.isWrite(name), key = 'dp-c:' + name + ':' + JSON.stringify(args || {}), cacheable = !write && !token && PUBLIC_READS[name] === 1;
     var url = '/api/' + name + (!write && args ? '?' + Object.keys(args).map(function (k) { return k + '=' + encodeURIComponent(args[k]); }).join('&') : '');
     var opt = { method: write ? 'POST' : 'GET', headers: {} };
     if (token) opt.headers.Authorization = 'Bearer ' + token;
     if (write) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(args || {}); }
     return fetch(url, opt).then(function (r) {
       return r.json().then(function (j) {
-        if (!r.ok) { var e = new Error(j.error); e.code = j.error; if (r.status === 401 && token) { token = null; sdel('dp-token'); } throw e; }
-        if (!write) sset(key, JSON.stringify(j)); // last copy, for offline reading
+        if (!r.ok) { var e = new Error(j.error); e.code = j.error; if (r.status === 401 && token) { token = null; sdel('dp-token'); clearCaches(); } throw e; }
+        if (cacheable) sset(key, JSON.stringify(j)); // last copy, for offline reading
         if (j.site) { site = j.site; sset('dp-site', JSON.stringify(site)); }
         return j;
       });
     }, function () {
-      var cached = !write && sget(key);
+      var cached = cacheable && sget(key);
       if (cached) { stale = true; return JSON.parse(cached); }
       var e = new Error('net'); e.code = 'net'; throw e;
     });
@@ -569,12 +579,14 @@
     document.body.appendChild(a); a.click(); a.remove();
   }
 
-  // Full audit log as CSV. Cells that start with = + - @ get a leading ' so a spreadsheet never runs them as formulas.
+  // Full audit log as CSV (UTF-8 with BOM so Excel reads Bangla). Cells that start with = + - @ get a leading ' so a spreadsheet never runs them as formulas.
   function auditCsv() {
     return api('auditall').then(function (r) {
       var q = function (v) { v = String(v == null ? '' : v); if (/^[=+\-@\t\r]/.test(v)) v = "'" + v; return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
-      var text = 'time_utc,admin,action,details\n' + r.audit.map(function (x) { return [new Date(x.at).toISOString(), x.name, x.action, JSON.stringify(x.args)].map(q).join(','); }).join('\n') + '\n';
-      var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' })); a.download = 'audit-' + new Date().toISOString().slice(0, 10) + '.csv';
+      var rows = r.audit.map(function (x) { var a = x.args || {}; return [new Date(x.at).toISOString(), x.by, x.name, x.action, a.user, a.market, JSON.stringify(a)].map(q).join(','); });
+      if (r.truncated) rows.push(['#', '', '', 'truncated', '', '', 'The log is capped at ' + r.cap + ' entries; ' + r.dropped + ' older entries were dropped and are not in this file'].map(q).join(','));
+      var text = '\ufefftime_utc,admin_uid,admin,action,target_user,market,details\n' + rows.join('\n') + '\n';
+      var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' })); a.download = 'audit-' + new Date().toISOString().slice(0, 10) + '.csv';
       document.body.appendChild(a); a.click(); a.remove();
     }, fail);
   }
@@ -776,7 +788,7 @@
     if (el.id === 'forgot') { resetMode = true; return render(); }
     if (el.id === 'backlogin') { resetMode = false; return render(); }
     if (el.id === 'swap') { signup = !signup; return render(); }
-    if (el.id === 'logout') { api('logout').catch(function () {}); token = null; me = null; sdel('dp-token'); location.hash = 'home'; return; }
+    if (el.id === 'logout') { api('logout').catch(function () {}); token = null; me = null; sdel('dp-token'); clearCaches(); location.hash = 'home'; return; }
   });
   document.addEventListener('input', function (ev) { if (ev.target.id === 'amt') updateEst(); });
   document.addEventListener('submit', function (ev) {
@@ -800,13 +812,13 @@
       otpPhone = $('#ophone').value;
       if (!otpSent) return api('otpsend', { phone: otpPhone }).then(function () { otpSent = true; render(); }, fail);
       return api('otpverify', { phone: otpPhone, code: $('#ocode').value }).then(function (r) {
-        otpMode = false; otpSent = false; token = r.token; sset('dp-token', token); location.hash = 'home'; render();
+        otpMode = false; otpSent = false; token = r.token; clearCaches(); sset('dp-token', token); location.hash = 'home'; render();
       }, fail);
     }
     if (ev.target.id === 'usereset') {
       ev.preventDefault();
       return api('usereset', { phone: $('#rphone').value, code: $('#rcode').value, pin: $('#rpin').value }).then(function (r) {
-        resetMode = false; token = r.token; sset('dp-token', token); location.hash = 'home'; render();
+        resetMode = false; token = r.token; clearCaches(); sset('dp-token', token); location.hash = 'home'; render();
       }, fail);
     }
     if (ev.target.id !== 'auth') return;
@@ -814,7 +826,7 @@
     var body = { mode: signup ? 'signup' : 'login', phone: $('#phone').value, pin: $('#pin').value };
     if (signup) { body.name = $('#name').value; body.adult = $('#adult').checked; body.consent = $('#consent').checked; body.device = deviceId(); }
     api('auth', body).then(function (r) {
-      token = r.token; sset('dp-token', token);
+      token = r.token; clearCaches(); sset('dp-token', token);
       var back = sget('dp-after'); sdel('dp-after');
       var to = back && /^(m-[\w.~-]+|j-[A-Za-z0-9-]{6,7}|groups)$/.test(back) ? back : 'home'; // back to the question or invite they tapped
       if (location.hash.slice(1) === to) render(); else location.hash = to;
@@ -839,7 +851,7 @@
     if (id === 'delacc') {
       ev.preventDefault();
       if (LOCAL) { sdel('dp-a-state'); location.hash = 'home'; location.reload(); return; }
-      api('delete', { pin: $('#dpin').value }).then(function () { token = null; me = null; sdel('dp-token'); toast(t('deleted')); location.hash = 'home'; }, fail);
+      api('delete', { pin: $('#dpin').value }).then(function () { token = null; me = null; sdel('dp-token'); clearCaches(); toast(t('deleted')); location.hash = 'home'; }, fail);
     }
   });
   window.addEventListener('hashchange', function () { render(); });
