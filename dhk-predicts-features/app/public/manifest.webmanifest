@@ -1,0 +1,10 @@
+{
+  "name": "Dhaka Predicts",
+  "short_name": "ঢাকা প্রেডিক্টস",
+  "lang": "bn",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f3f6f4",
+  "theme_color": "#0a5c47",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

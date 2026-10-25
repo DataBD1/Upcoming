@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="bn">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a5c47">
+<meta name="description" content="A free forecasting game with points only. No money, no prizes.">
+<title>Dhaka Predicts</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header class="top"><h1 id="title"></h1><span class="pts" id="pts"></span><button class="lang" id="help" type="button">মতামত</button><button class="lang" id="lang" type="button">EN</button></header>
+<main id="main"><noscript>JavaScript চালু করুন / Please enable JavaScript.</noscript></main>
+<nav class="tabs" id="tabs"></nav>
+<div class="sheet" id="fb" hidden><form class="card" id="fbform"><h3 id="fbh"></h3><textarea id="fbtext" rows="4" maxlength="1000" required></textarea><div class="sides"><button class="ghost" type="button" id="fbclose"></button><button class="go" type="submit" id="fbsend"></button></div></form></div>
+<div class="toast" id="toast" role="status" hidden></div>
+<script src="/core.js" defer></script>
+<script src="/app.js" defer></script>
+</body>
+</html>

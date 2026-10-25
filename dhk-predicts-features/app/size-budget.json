@@ -1,0 +1,5 @@
+{
+  "files": { "public/index.html": 0.6, "public/app.css": 3, "core.js": 15, "social.js": 3, "public/app.js": 26, "public/share.js": 4.5 },
+  "total": 46,
+  "excludeFromTotal": ["public/share.js"]
+}

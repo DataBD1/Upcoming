@@ -8,6 +8,6 @@ Small standalone tools, one folder each. No dependencies, Node 18+. Run `npm tes
 | `size-budget/` | Fails CI when files grow past a brotli size budget |
 | `i18n-parity/` | Checks two language dictionaries have the same keys and placeholders |
 
-Also `dhk-predicts-features/`: six in-app features for DataBD1/DHK-Predicts as one tested patch (see its README).
+Also `dhk-predicts-features/`: a runnable copy of the DHK-Predicts app with six new features (`cd dhk-predicts-features/app && npm start`). It uses the three tools above for its checks.
 
 Extracted from DataBD1/DHK-Predicts.
