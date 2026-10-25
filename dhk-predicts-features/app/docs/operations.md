@@ -25,19 +25,19 @@ Rules: never merge on red CI; never skip a test to get green; one change per pul
 ## 3. Rollback
 
 - **Bad code**: in Vercel → Deployments, pick the last good one → Promote to Production. Takes seconds and doesn't touch data. Then revert the pull request in GitHub. (Needs the Vercel dashboard, so **SK** clicks it until agents can reach Vercel; the agent says exactly which deployment.)
-- **Bad data** (wrong settlement, corrupted state): restore from `app_state_history`, which keeps a copy at most every 10 minutes. Copies hold the whole state (main row and shards together) in the old single-blob shape; after a restore the next write re-shards it, so the steps below are unchanged:
+- **Bad data** (wrong settlement, corrupted state): restore from `app_state_history`, which keeps a copy at most every 10 minutes (the database takes it itself, after the trade that made it due, never inside a request; if copies get slow the gap grows, up to an hour). Copies hold the whole state (main row and shards together) in the old single-blob shape; after a restore the next write re-shards it, so the steps below are unchanged:
   ```sql
   update app_state s set data = h.data, version = s.version + 1, updated_at = now()
   from (select data from app_state_history where key = 'rival-a'
         and saved_at <= '<time before the problem>' order by saved_at desc limit 1) h
   where s.key = 'rival-a';
   ```
-  The `version = s.version + 1` matters: server copies keep the state in memory and notice a change by its version (and reload fully every 10 minutes regardless), so a manual edit that leaves the version alone can take up to 10 minutes to show. Tested on 15 Oct against Postgres 18. Trades after that copy are lost, so prefer a correcting admin action (re-settle, clawback) when the problem is one market.
+  The `version = s.version + 1` matters: server copies keep the state in memory and notice a change by its version (and reload fully about every 10 minutes regardless), so a manual edit that leaves the version alone can take up to 10 minutes to show. Because the restored row is a single blob, the first write after it re-creates every shard row under a new epoch; server copies that were idle through the restore see the new epoch (or a version that went down) and reload everything, so they do not keep removed players. Do the restore, then make one harmless write (any feedback or an admin note) and check `/api/home` before announcing it. Tested against Postgres 18 (`test-pgstore.js`, "F8"). Trades after that copy are lost, so prefer a correcting admin action (re-settle, clawback) when the problem is one market.
 
 ## 4. Backups
 
-- In the database: rollback copies as above. Old copies past 30 days can be pruned once size matters.
-- Outside the database: `api/backup.js`, a Vercel cron at 21:30 UTC (03:30 Dhaka), writes the whole state (main row plus `app_shards`, read in one snapshot) to a private Vercel Blob as `backups/YYYY-MM-DD.json` and keeps 30 days. Restore = load that file's `data` into `app_state` for key `rival-a`.
+- In the database: rollback copies as above. They are pruned automatically after each new copy: the newest 48 are kept, plus the last copy of each day for 30 days (about 80 copies at most; each is the whole state, 0.7 MB at 10,000 light players, so about 60 MB).
+- Outside the database: `api/backup.js`, a Vercel cron at 21:30 UTC (03:30 Dhaka), writes the whole state (main row plus `app_shards`, read in one snapshot) to a private Vercel Blob as `backups/YYYY-MM-DD.json` and keeps 30 days. It looks for today's file in Blob first, so a repeat call does not read the database. **In production it refuses to run (503) unless `CRON_SECRET` is set** (Vercel sends it on cron calls; set any long random string in the project's environment variables). Restore = load that file's `data` into `app_state` for key `rival-a` with `version = version + 1`, as in section 3.
 - Restore drill: once before the beta (Risk condition for A18), then monthly.
 
 ## 5. Monitoring
@@ -47,7 +47,8 @@ Rules: never merge on red CI; never skip a test to get green; one change per pul
 | Is it up | A scheduled agent loads `/` and `/api/home` | Ops routine; posts in the project only on failure |
 | Errors | Vercel function logs (server errors are logged by `handler.js`) | Agent reads them when a user reports a problem |
 | Usage | A8 analytics events in the state, summarised weekly | Growth report |
-| Database size | `select pg_column_size(data) from app_state` and `select count(*) from app_shards` | Monthly; the main row should stay small. Shard `events`/`audit`/`feedback` when it passes about 1 MB |
+| Database size | `select pg_column_size(data) from app_state` and `select count(*) from app_shards` | Monthly; the main row should stay small (about 1 KB per market, no matter how many holders; `feedback` and `audit` add up to about 1 MB at their caps). Shard `audit`/`feedback` when it passes about 1 MB |
+| Database errors | Vercel function logs: `api error in <action>: <SQLSTATE> <message>` (no secrets). The API answers 503 when a retry may work (lost connection, timeout, too many writes queued) and 500 otherwise, never 400 | Agent reads them when users report "setting up, back soon" |
 
 Until agents can reach Vercel and Supabase from the cloud (network allowlist, S5), uptime checks run from the user side only. Add `*.vercel.app` and the Supabase host to the allowlist at S5 so checks and restores need no help from SK.
 

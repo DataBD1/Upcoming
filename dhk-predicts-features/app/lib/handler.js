@@ -383,8 +383,12 @@ async function handleApi(store, { method, name, body, token, ua, country, ip }) 
     if (name === 'inbox') out.adminCount = adminCount(s);
     return [200, out];
   } catch (e) {
-    if (!e.code) console.error(e);
-    return [e.code === 'login' ? 401 : e.code ? 400 : 500, { error: e.code || 'server' }];
+    // App errors carry a lowercase word code (bonus_taken, ...) and are the caller's fault: 4xx. A database
+    // error (Postgres SQLSTATE such as 22P05, or ECONNRESET) is ours: 503 when trying again may work, else 500.
+    // It is logged here without the connection string, and the client only sees { error: 'server' }.
+    const app = typeof e.code === 'string' && /^[a-z][a-z0-9_]*$/.test(e.code) && !e.db;
+    if (!app) console.error('api error in ' + String(name).slice(0, 20) + ':', e.db ? (e.code || '') + ' ' + String(e.message).split('\n')[0].replace(/(postgres(ql)?:\/\/)[^@\s]*@/gi, '$1***@').slice(0, 200) : e);
+    return [app ? (e.code === 'login' ? 401 : 400) : (e.http || 500), { error: app ? e.code : 'server' }];
   }
 }
 

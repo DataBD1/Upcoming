@@ -8,7 +8,7 @@
     "start": "node server.js",
     "test": "node test.js && node test-api.js && node test-disputes.js && node test-resolution.js && node test-security.js && node test-social.js && node test-retention.js && node test-features.js && node ../../size-budget/test.js && node test-streak.js && node test-window.js && node test-audit.js && node test-admin.js && node test-reset.js && node test-otp.js && npm run check",
     "check": "node ../../i18n-parity/index.js public/app.js \"var T = \" bn en --used-in public/app.js --array-marker \"var PRIVACY = \" --array-marker \"var TERMS = \" --codes-in core.js,social.js,lib/handler.js --bangla bn && node ../../size-budget/index.js size-budget.json",
-    "test:pg": "node test-pg.js && node test-pg-otp.js && node test-reset-pg.js",
+    "test:pg": "node test-pg.js && node test-pg-otp.js && node test-reset-pg.js && node test-pgstore.js",
     "test:browser": "node test-browser-cache.js"
   },
   "dependencies": {

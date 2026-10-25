@@ -19,8 +19,21 @@ try {
   console.error('api boot failed:', e);
 }
 
+// Whatever goes wrong inside a request (a lost database connection, a bug) answers that one request with a JSON
+// error and is logged without secrets. It never takes the server copy down: a rejected promise here would
+// otherwise be an unhandled rejection, and Node exits on those.
+function fail(res, e) {
+  console.error('api request failed:', String((e && e.message) || e).split('\n')[0].replace(/(postgres(ql)?:\/\/)[^@\s]*@/gi, '$1***@').slice(0, 200));
+  try {
+    if (!res.headersSent) res.writeHead((e && e.http) || 500, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ error: 'server' }));
+  } catch { /* the client is gone */ }
+}
+
 module.exports = (req, res) => {
-  if (serve) return serve(req, res);
+  if (serve) {
+    try { return Promise.resolve(serve(req, res)).catch(e => fail(res, e)); } catch (e) { return fail(res, e); }
+  }
   // Say what is missing without leaking values, so a bad deploy is diagnosable from outside.
   res.writeHead(503, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify({ error: 'boot', detail: (bootError && bootError.code) || String(bootError && bootError.message).split('\n')[0].replace(/\/[^\s']+/g, '…').slice(0, 120),

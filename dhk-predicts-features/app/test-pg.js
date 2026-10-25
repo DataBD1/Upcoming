@@ -4,9 +4,9 @@ const assert = require("assert"), fs = require("fs"), os = require("os"), path =
 const EmbeddedPostgres = require("embedded-postgres").default;
 const { Client } = require("pg");
 (async () => {
-  const pg = new EmbeddedPostgres({ databaseDir: fs.mkdtempSync(path.join(os.tmpdir(), "ra-")), user: "t", password: "t", port: 54331, persistent: false, onLog: () => {} });
+  const pg = new EmbeddedPostgres({ databaseDir: fs.mkdtempSync(path.join(os.tmpdir(), "ra-")), user: "t", password: "t", port: +process.env.PGPORT_TEST || 54331, persistent: false, onLog: () => {} });
   await pg.initialise(); await pg.start();
-  const url = "postgres://t:t@localhost:54331/postgres";
+  const url = "postgres://t:t@localhost:" + (+process.env.PGPORT_TEST || 54331) + "/postgres";
   process.env.PGSTORE_VERIFY = "1"; process.env.POSTGRES_URL = url; process.env.ADMIN_PHONES = "01711000000";
   try {
     // Two "serverless instances": separate module copies, separate pools.
@@ -67,8 +67,8 @@ const { Client } = require("pg");
     [st, r] = await call(3200, "home", {}, null, "GET"); const open = r.markets.find((m) => m.status === "open"); assert(open, "an open market");
     [st, r] = await call(3200, "buy", { id: open.id, side: "y", amount: 20 }, tokens[7]); assert.equal(st, 200, JSON.stringify(r));
     const x1 = await xmins(), changed = Object.keys(x1).filter((k) => x0[k] !== x1[k]);
-    assert(changed.length >= 1 && changed.length <= 3, "one buy rewrites only that player's rows, got " + JSON.stringify(changed));
-    assert(changed.every((k) => /^(pos|log|users)\//.test(k)), "only that player's rows changed: " + JSON.stringify(changed));
+    assert(changed.length >= 1 && changed.length <= 4, "one buy rewrites only that player's rows and the market's row, got " + JSON.stringify(changed));
+    assert(changed.every((k) => /^(pos|log|users|mkt)\//.test(k)), "only that player's rows and the market's own row changed: " + JSON.stringify(changed));
     // Deleting an account removes its session shard (its trades stay anonymous).
     [st, r] = await call(3200, "me", {}, tokens[9], "GET"); const gone = r.me.id;
     const sessBefore = +(await c.query("select count(*) n from app_shards where key='rival-a' and coll='sessions' and not deleted")).rows[0].n;
