@@ -40,19 +40,66 @@ const { Client } = require("pg");
     [st, r] = await call(3201, "resolve", { id: "bdt-usd-mar", outcome: "na" }, admin); assert.equal(st, 200, JSON.stringify(r));
     [st, r] = await call(3200, "me", {}, tokens[3], "GET"); assert.equal(r.me.pts, 1000);
     // Restore drill: take the latest rollback copy and put it back.
-    const c = new Client({ connectionString: url }); await c.connect();
-    await c.query("insert into app_state_history (key, version, data) select key, version, data from app_state where key='rival-a'");
-    const before = (await c.query("select data from app_state where key='rival-a'")).rows[0].data;
+    const c = new Client({ connectionString: url }); c.on("error", () => {}); await c.connect();
+    const { loadFull } = require("./lib/pgstore.js");
+    const beforeFull = await loadFull(c, "rival-a");
+    // The store writes rollback copies as full-state blobs; do the same here for the drill.
+    await c.query("insert into app_state_history (key, version, data) values ('rival-a', $1, $2)", [beforeFull.version, JSON.stringify(beforeFull.state)]);
     await c.query("update app_state set data = '{}'::jsonb where key='rival-a'");
     [st] = await call(3200, "home", {}, tokens[3], "GET"); assert.notEqual(st, 200, "damaged state should break");
     await c.query(`update app_state s set data = h.data, version = s.version + 1 from
       (select data from app_state_history where key='rival-a' order by id desc limit 1) h where s.key='rival-a'`);
     [st, r] = await call(3200, "me", {}, tokens[3], "GET"); assert.equal(r.me.pts, 1000, "restored");
-    assert.deepEqual((await c.query("select data from app_state where key='rival-a'")).rows[0].data, before);
+    assert.deepEqual((await loadFull(c, "rival-a")).state, beforeFull.state, "restore brings back the full state");
+    // The next write re-shards the restored blob.
+    [st] = await call(3200, "feedback", { text: "after restore" }, tokens[3]); assert.equal(st, 200);
+    const main2 = (await c.query("select data from app_state where key='rival-a'")).rows[0].data;
+    assert.equal(main2.__v, 2); assert(!("sessions" in main2) && !("pos" in main2), "restored blob is sharded again");
+    assert.equal((await call(3201, "me", {}, tokens[3], "GET"))[1].me.pts, 1000, "sessions survive re-sharding");
+
+    // ---- Sharding: big maps live in app_shards, and a write touches only the rows that changed.
     const size = (await c.query("select pg_column_size(data) b, length(data::text) t from app_state where key='rival-a'")).rows[0];
-    console.log("state size after 21 users / 100 trades:", size);
+    const shardN = +(await c.query("select count(*) n from app_shards where key='rival-a'")).rows[0].n;
+    assert(shardN > 40, "sessions, positions and logs are in app_shards (" + shardN + ")");
+    for (const coll of ["sessions", "pos", "log"]) assert(!(coll in main2), coll + " is not in the main row");
+    const xmins = async () => Object.fromEntries((await c.query("select coll||'/'||k id, xmin::text x from app_shards where key='rival-a'")).rows.map((r) => [r.id, r.x]));
+    const x0 = await xmins();
+    [st, r] = await call(3200, "home", {}, null, "GET"); const open = r.markets.find((m) => m.status === "open"); assert(open, "an open market");
+    [st, r] = await call(3200, "buy", { id: open.id, side: "y", amount: 20 }, tokens[7]); assert.equal(st, 200, JSON.stringify(r));
+    const x1 = await xmins(), changed = Object.keys(x1).filter((k) => x0[k] !== x1[k]);
+    assert(changed.length >= 1 && changed.length <= 3, "one buy rewrites only that player's rows, got " + JSON.stringify(changed));
+    assert(changed.every((k) => /^(pos|log)\//.test(k)), "only position/log rows changed: " + JSON.stringify(changed));
+    // Deleting an account removes its session shard (its trades stay anonymous).
+    [st, r] = await call(3200, "me", {}, tokens[9], "GET"); const gone = r.me.id;
+    const sessBefore = +(await c.query("select count(*) n from app_shards where key='rival-a' and coll='sessions'")).rows[0].n;
+    [st, r] = await call(3200, "delete", { pin: "secret12" }, tokens[9]); assert.equal(st, 200, JSON.stringify(r));
+    const sessAfter = +(await c.query("select count(*) n from app_shards where key='rival-a' and coll='sessions'")).rows[0].n;
+    assert.equal(sessAfter, sessBefore - 1, "the deleted account's session row is gone");
+    assert.equal((await call(3200, "home", {}, tokens[9], "GET"))[1].me, null, "and its token no longer works");
+    console.log("state size after 21 users / 100 trades (main row only):", size, "| shard rows:", shardN);
+
+    // ---- Backup reads main row + shards in one snapshot and gives the old single-blob shape.
+    const full = await loadFull(c, "rival-a");
+    assert(full.state.sessions && Object.keys(full.state.sessions).length >= 20 && full.state.pos && full.state.users, "full state is whole");
+    assert.equal(JSON.stringify(full.state).includes("__v"), false);
+
+    // ---- Migration of a legacy single-blob row (the format every earlier version wrote).
+    const { createStore } = require("./lib/pgstore.js");
+    const legacy = { v: 4, users: { u1: { name: "L" } }, markets: [], pos: { u1: { m: { y: 1, n: 0, spent: 1 } } }, sessions: { h1: ["u1", 1] }, log: { u1: [{ at: 1 }] }, custom: { keep: true } };
+    const ls = createStore({ url, key: "legacy", seed: () => legacy });
+    assert.deepEqual(await ls.read(), legacy, "a legacy row reads as is, before any write");
+    await ls.transact((s) => { s.pos.u1.m.y = 2; s.resets = { r1: { uid: "u1", exp: 5 } }; });
+    const lm = (await c.query("select data from app_state where key='legacy'")).rows[0].data;
+    assert.equal(lm.__v, 2); assert(!lm.pos && !lm.sessions && !lm.log && !lm.resets); assert.deepEqual(lm.custom, { keep: true });
+    const back = await ls.read();
+    assert.equal(back.pos.u1.m.y, 2); assert.deepEqual(back.sessions, legacy.sessions); assert.deepEqual(back.resets, { r1: { uid: "u1", exp: 5 } });
+    await assert.rejects(ls.transact((s) => { s.pos.u1.m.y = 99; throw new Error("boom"); }), /boom/);
+    assert.equal((await ls.read()).pos.u1.m.y, 2, "a failed change saves nothing, shards included");
+    await ls.transact((s) => { delete s.sessions.h1; });
+    assert.deepEqual((await ls.read()).sessions, {}, "removed keys are removed");
+    await ls.end();
     await c.end(); servers.forEach((s) => s.close());
-    console.log("rival A on Postgres: all checks passed (2 instances, 100 concurrent buys, sessions, rate limit, N/A, restore)");
+    console.log("rival A on Postgres: all checks passed (2 instances, 100 concurrent buys, sessions, rate limit, N/A, restore, sharding, backup shape, legacy migration)");
   } finally { await pg.stop(); }
   process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });

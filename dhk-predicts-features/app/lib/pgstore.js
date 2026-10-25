@@ -1,14 +1,20 @@
 // Postgres-backed replacement for the JSON-file stores used by every build
 // (handoff-engine/store.ts, rival-a/server.js, rival-c/server.js).
-// The whole app state lives in one jsonb row; each write locks that row, so trades never
-// interleave even across serverless instances. Fine for the beta (hundreds of users);
-// move hot tables out of the blob before it passes a few MB.
+// The app state is one small jsonb row (app_state) plus one row per player/session/etc. for the
+// large maps in SHARDED (app_shards). Each write still locks the app_state row, so trades never
+// interleave even across serverless instances, but it now rewrites only the shard rows that
+// changed, not the whole state. Reads still load every shard, so the next step past a few
+// thousand players is loading only the shards a request needs (a change in core.js).
+// Rollback copies (app_state_history) and backups hold the FULL state in the old single-blob
+// shape; an app_state row without "__v" is treated as such a blob and is re-sharded by the next write.
 //
 // Env: POSTGRES_URL (set by Vercel's Supabase integration) or DATABASE_URL.
 // Tables are created on first use, so nobody has to run SQL by hand.
 const { Pool } = require("pg");
 
 const SNAPSHOT_EVERY_MS = 10 * 60 * 1000; // keep a rollback copy at most every 10 minutes
+const SHARDED = ["sessions", "pos", "log", "attempts", "resets", "devices"]; // top-level maps kept one row per key
+const isMap = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 
 function poolFor(url) {
   if (!url) throw new Error("pgstore: set POSTGRES_URL or DATABASE_URL");
@@ -19,6 +25,42 @@ function poolFor(url) {
   // An idle connection dropped by the database (restart, pooler timeout) must not crash the process.
   pool.on("error", (e) => console.error("pgstore: idle connection lost:", e.message));
   return pool;
+}
+
+
+/** The full state for `key`, as one object, from a pool or a client. Returns null if there is no row.
+ *  `shards` is the json text of every shard row as loaded (null for a legacy single-blob row), used to find what changed. */
+async function loadFull(q, key, lock) {
+  const { rows } = await q.query(
+    "select data, version, updated_at from app_state where key = $1" + (lock ? " for update" : ""), [key]);
+  if (!rows[0]) return null;
+  const { data, version, updated_at } = rows[0];
+  if (!data.__v) return { state: data, version, updated_at, shards: null, saved: JSON.stringify(data) };
+  const state = { ...data }; delete state.__v;
+  const shards = {};
+  for (const c of SHARDED) { state[c] = {}; shards[c] = {}; }
+  const { rows: sr } = await q.query("select coll, k, data from app_shards where key = $1", [key]);
+  for (const r of sr) if (shards[r.coll]) { state[r.coll][r.k] = r.data; shards[r.coll][r.k] = JSON.stringify(r.data); }
+  return { state, version, updated_at, shards };
+}
+
+/** Save `state` as the main row plus shard rows. `shards` is what loadFull saw (null = rewrite every shard). */
+async function saveFull(c, key, state, shards) {
+  const main = { ...state, __v: 2 };
+  if (!shards) await c.query("delete from app_shards where key = $1", [key]);
+  for (const coll of SHARDED) {
+    const cur = state[coll];
+    if (!isMap(cur)) continue; // missing or odd: leave it where it is (inline) rather than lose it
+    delete main[coll];
+    const old = (shards && shards[coll]) || {}, put = {}, gone = [];
+    for (const k of Object.keys(cur)) { const j = JSON.stringify(cur[k]); if (old[k] !== j) put[k] = JSON.parse(j); }
+    for (const k of Object.keys(old)) if (!(k in cur)) gone.push(k);
+    if (Object.keys(put).length) await c.query(
+      "insert into app_shards (key, coll, k, data) select $1, $2, e.key, e.value from jsonb_each($3::jsonb) e " +
+      "on conflict (key, coll, k) do update set data = excluded.data", [key, coll, JSON.stringify(put)]);
+    if (gone.length) await c.query("delete from app_shards where key = $1 and coll = $2 and k = any($3::text[])", [key, coll, gone]);
+  }
+  return main;
 }
 
 function createStore({ url = process.env.POSTGRES_URL || process.env.DATABASE_URL, key = "main", seed }) {
@@ -34,7 +76,10 @@ function createStore({ url = process.env.POSTGRES_URL || process.env.DATABASE_UR
         create table if not exists app_state_history (
           id bigserial primary key, key text not null, version bigint not null,
           data jsonb not null, saved_at timestamptz not null default now());
-        create table if not exists app_secrets (name text primary key, value text not null);`);
+        create table if not exists app_secrets (name text primary key, value text not null);
+        create table if not exists app_shards (
+          key text not null, coll text not null, k text not null, data jsonb not null,
+          primary key (key, coll, k));`);
       await pool.query(
         "insert into app_state (key, data) values ($1, $2) on conflict (key) do nothing",
         [key, JSON.stringify(await seed())]);
@@ -44,8 +89,7 @@ function createStore({ url = process.env.POSTGRES_URL || process.env.DATABASE_UR
 
   async function read() {
     await init();
-    const { rows } = await pool.query("select data from app_state where key = $1", [key]);
-    return rows[0].data;
+    return (await loadFull(pool, key, false)).state;
   }
 
   /** Run fn on a copy of the state and save it. If fn throws, nothing is saved. */
@@ -54,18 +98,19 @@ function createStore({ url = process.env.POSTGRES_URL || process.env.DATABASE_UR
     const c = await pool.connect();
     try {
       await c.query("begin");
-      const { rows } = await c.query(
-        "select data, version, updated_at from app_state where key = $1 for update", [key]);
-      const draft = rows[0].data;
-      const out = await fn(draft);
+      const cur = await loadFull(c, key, true);
+      const draft = cur.state;
       const { rows: last } = await c.query(
         "select max(saved_at) as t from app_state_history where key = $1", [key]);
-      if (!last[0].t || Date.now() - new Date(last[0].t).getTime() > SNAPSHOT_EVERY_MS) {
-        await c.query("insert into app_state_history (key, version, data) values ($1, $2, $3)",
-          [key, rows[0].version, JSON.stringify(rows[0].data)]);
-      }
+      // Rollback copies hold the whole state in the single-blob shape, taken before this change.
+      const snapshot = !last[0].t || Date.now() - new Date(last[0].t).getTime() > SNAPSHOT_EVERY_MS
+        ? cur.saved || JSON.stringify(draft) : null;
+      const out = await fn(draft);
+      if (snapshot) await c.query("insert into app_state_history (key, version, data) values ($1, $2, $3)",
+        [key, cur.version, snapshot]);
+      const main = await saveFull(c, key, draft, cur.shards);
       await c.query("update app_state set data = $2, version = version + 1, updated_at = now() where key = $1",
-        [key, JSON.stringify(draft)]);
+        [key, JSON.stringify(main)]);
       await c.query("commit");
       return out;
     } catch (e) {
@@ -89,4 +134,4 @@ function createStore({ url = process.env.POSTGRES_URL || process.env.DATABASE_UR
   return { read, transact, secret, end: () => pool.end() };
 }
 
-module.exports = { createStore };
+module.exports = { createStore, loadFull, SHARDED };

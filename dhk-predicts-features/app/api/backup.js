@@ -1,11 +1,12 @@
 // Nightly backup outside the database (Risk condition for A18). Vercel cron calls this daily
-// (vercel.json "crons"); it writes the whole state row to a private Vercel Blob store as
+// (vercel.json "crons"); it writes the whole state (the app_state row plus app_shards) to a private Vercel Blob store as
 // backups/YYYY-MM-DD.json and deletes copies older than 30 days.
 // Needs a Blob store connected to the project (sets BLOB_READ_WRITE_TOKEN). Restore: load the
-// JSON into app_state.data for key 'rival-a' (tech/operations.md section 3).
+// JSON into app_state.data for key 'rival-a' (docs/operations.md section 3); the next write re-shards it.
 'use strict';
 const { put, list, del } = require('@vercel/blob');
 const { Pool } = require('pg');
+const { loadFull } = require('../lib/pgstore.js');
 
 const KEEP_DAYS = 30;
 let pool;
@@ -24,10 +25,17 @@ module.exports = async (req, res) => {
         max: 1, ssl: local ? false : { rejectUnauthorized: false } });
       pool.on('error', e => console.error('backup: idle connection lost:', e.message));
     }
-    const { rows } = await pool.query("select data, version, updated_at from app_state where key = 'rival-a'");
-    if (!rows[0]) throw new Error('no state row yet');
+    // One consistent snapshot of the main row and every shard.
+    const c = await pool.connect();
+    let full;
+    try {
+      await c.query('begin isolation level repeatable read read only');
+      full = await loadFull(c, 'rival-a', false);
+      await c.query('commit');
+    } catch (e) { await c.query('rollback').catch(() => {}); throw e; } finally { c.release(); }
+    if (!full) throw new Error('no state row yet');
     const day = new Date().toISOString().slice(0, 10);
-    const body = JSON.stringify({ key: 'rival-a', version: rows[0].version, updated_at: rows[0].updated_at, data: rows[0].data });
+    const body = JSON.stringify({ key: 'rival-a', version: full.version, updated_at: full.updated_at, data: full.state });
     let wrote = true;
     try {
       await put(`backups/${day}.json`, body, { access: 'private', contentType: 'application/json', addRandomSuffix: false, allowOverwrite: false });

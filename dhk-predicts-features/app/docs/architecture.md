@@ -58,7 +58,7 @@ Points are a number in this row and nothing else: there is no code path to buy, 
 
 | Limit | Where it bites | Next step |
 |---|---|---|
-| One state row, rewritten on every trade | About 21 KB at 21 users and 100 trades, so a few hundred KB at 1,000 users. Each write rewrites it. Fine to a few thousand users. | Before about 2,000 active users: move `trades/pos/sessions` into their own tables, keep the same `core.js` rules. |
+| One state row, rewritten on every trade | **Done in `lib/pgstore.js`:** sessions, positions, trade logs, login attempts, reset codes and device flags now live one row each in `app_shards`; a write rewrites only the rows that changed (a buy touches that player's position and log rows). What stays in the main row: users, markets, events, audit, feedback (29 KB at 21 users and 100 trades, down from 44 KB). Reads still load every shard. | Past a few thousand players: load only the shards a request needs (needs a `core.js` change), and shard `events`/`audit`/`feedback` too. |
 | One row lock | Every write queues behind the last one, a few ms each. | Same as above. |
 | Supabase free tier | Pauses after 7 days with no traffic; 500 MB. No downloadable backups. | Daily traffic keeps it awake. Nightly export (operations.md) covers backups. Pro ($25/mo) when revenue starts. |
 | Vercel Hobby | Non-commercial use only. | Pro ($20/mo) when the first sponsor deal is signed. |
