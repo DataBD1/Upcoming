@@ -420,7 +420,7 @@
   // The whole audit log (at most 5000 entries) for the admin CSV export.
   READS.auditall = function (s, uid) {
     if (!uid || !s.users[uid].admin) throw err('forbidden');
-    return { audit: (s.audit || []).slice().reverse() };
+    return { audit: (s.audit || []).slice().reverse(), truncated: (s.auditDropped || 0) > 0, dropped: s.auditDropped || 0, cap: AUDIT_CAP };
   };
 
   var WRITES = {
@@ -702,7 +702,13 @@
     s.users[uid] = { id: uid, name: '—', pts: 0, deleted: now, created: u.created };
     s.feedback = (s.feedback || []).filter(function (f) { return f.uid !== uid; });
     s.markets.forEach(function (m) { (m.disputes || []).forEach(function (d) { if (d.uid === uid) { d.name = '—'; d.reason = ''; d.link = ''; } }); });
-    (s.audit || []).forEach(function (x) { if (x.by === uid) x.name = '—'; });
+    // Audit log keeps ids and action names; free text that can hold personal data is redacted.
+    var KEEP = { user: 1, market: 1, id: 1, amount: 1, shortfall: 1, out: 1, outcome: 1, to: 1, status: 1, on: 1, demoted: 1, truncated: 1 };
+    (s.audit || []).forEach(function (x) {
+      var mine = x.by === uid, about = x.args && x.args.user === uid;
+      if (mine) x.name = '—';
+      if ((mine || about) && x.args) Object.keys(x.args).forEach(function (k) { if (!KEEP[k] && typeof x.args[k] === 'string' && x.args[k]) x.args[k] = '[redacted]'; });
+    });
     Object.keys(s.devices || {}).forEach(function (d) { s.devices[d] = s.devices[d].filter(function (id) { return id !== uid; }); if (!s.devices[d].length) delete s.devices[d]; });
   }
 
@@ -746,10 +752,14 @@
 
   // Every admin write is logged with who, when, and what.
   var ADMIN_ACTIONS = { adjust: 1, propose: 1, retract: 1, resolve: 1, review: 1, confirm: 1, open: 1, fbstatus: 1, create: 1, city: 1, signup: 1, sponsor: 1 };
+  var AUDIT_CAP = 5000;
   function audit(s, uid, name, a, now) {
     s.audit = s.audit || [];
-    s.audit.push({ at: now, by: uid, name: s.users[uid].name, action: name, args: JSON.parse(JSON.stringify(a)) });
-    if (s.audit.length > 5000) s.audit.shift();
+    var args = JSON.parse(JSON.stringify(a));
+    Object.keys(args).forEach(function (k) { if (typeof args[k] === 'string' && args[k].length > 500) args[k] = args[k].slice(0, 500); });
+    if (JSON.stringify(args).length > 2000) args = { truncated: true };
+    s.audit.push({ at: now, by: uid, name: s.users[uid].name, action: name, args: args });
+    while (s.audit.length > AUDIT_CAP) { s.audit.shift(); s.auditDropped = (s.auditDropped || 0) + 1; }
   }
 
   // Extension points for add-on modules (social.js).
@@ -772,7 +782,7 @@
       BEFORE.forEach(function (f) { f(state, uid, name, args || {}, now); });
       var r = write(state, uid, args || {}, now);
       (own(AFTER, name) || []).forEach(function (f) { f(state, uid, args || {}, now, r); });
-      if (ADMIN_ACTIONS[name]) audit(state, uid, name, args || {}, now);
+      if (ADMIN_ACTIONS[name] || (name === 'rename' && state.users[uid].admin)) audit(state, uid, name, args || {}, now);
       return r;
     }
     throw err('unknown');
