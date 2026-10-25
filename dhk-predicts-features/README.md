@@ -18,4 +18,4 @@ Base commit: `bbcab1e` ("Sync rival-a: site clock UTC+0 ..."). Tested: applied t
 
 Tests: `test-features.js` (added by the patch). The patch also bumps the service-worker cache to `dp-a-v4`.
 Not in the patch: `preview.html` (rebuild with `node build-preview.js`) and README text.
-The full, already-merged-free version is on the `ccr-e3d32d8f-y7yw8y` branch of DHK-Predicts.
+The full version, with the three tools too, is on the `ccr-e3d32d8f-y7yw8y` branch of DHK-Predicts.
