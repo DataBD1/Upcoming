@@ -55,7 +55,8 @@ const call = (name, body = {}, token, method = 'POST', country = 'GB') => handle
   process.env.VERCEL_ENV = 'production';
   process.env.ADMIN_PHONES = ''; assert.throws(() => ADMINS(), /ADMIN_PHONES/);
   process.env.ADMIN_PHONES = '+12025550123, not-a-phone'; assert.throws(() => ADMINS(), /ADMIN_PHONES/);
-  process.env.ADMIN_PHONES = keep; assert.equal(ADMINS().length, 2); delete process.env.VERCEL_ENV;
+  process.env.ADMIN_PHONES = keep; assert.throws(() => ADMINS(), /ADMIN_SETUP_CODE/, 'production needs the setup code');
+  process.env.ADMIN_SETUP_CODE = 'launch-code'; assert.equal(ADMINS().length, 2); delete process.env.ADMIN_SETUP_CODE; delete process.env.VERCEL_ENV;
   (await store.read()).attempts = {}; // clear the login limit tripped above
   // A31: see, correct, delete
   [st, r] = await call('account', {}, riya, 'GET');
