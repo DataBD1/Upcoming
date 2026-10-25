@@ -57,9 +57,11 @@
       var base = s.weekstart && has(s.weekstart, uid) ? s.weekstart[uid] : Core.START_POINTS;
       return Math.round(worth(s, uid) - base);
     }
-    function row(s, uid, me) {
-      var u = s.users[uid];
-      return { id: uid, name: u.name, worth: Math.round(worth(s, uid)), week: gain(s, uid), streak: liveStreak(s, uid, Date.now()), bot: !!u.bot, me: uid === me };
+    function row(s, uid, me, now, hideId) {
+      var u = s.users[uid], r = { name: u.name, worth: Math.round(worth(s, uid)), week: gain(s, uid), bot: !!u.bot, me: uid === me };
+      if (uid === me || !hideId) r.id = uid;
+      if (uid === me) r.streak = liveStreak(s, uid, now); // other players' streak is not shared; group co-members get no id either
+      return r;
     }
 
     // ---- streaks -------------------------------------------------------------
@@ -68,7 +70,8 @@
       var u = s.users[uid];
       if (!u.streakDay) return 0;
       var today = siteDay(s, now), yest = siteDay(s, now - 864e5);
-      return (u.streakDay === today || u.streakDay === yest) ? (u.streak || 0) : 0;
+      // a day in the future (left by the Dhaka->UTC migration) counts as today
+      return (u.streakDay >= today || u.streakDay === yest) ? (u.streak || 0) : 0;
     }
 
     // ---- reads -----------------------------------------------------------------
@@ -76,10 +79,10 @@
       if (!uid) throw Core.err('login');
       var u = s.users[uid];
       return {
-        streak: liveStreak(s, uid, now), best: u.bestStreak || 0, week: s.week ? s.week.id : weekId(s, now),
+        streak: liveStreak(s, uid, now), bonusReady: u.lastBonus !== siteDay(s, now), best: u.bestStreak || 0, week: s.week ? s.week.id : weekId(s, now),
         groups: myGroups(s, uid).map(function (c) {
           var g = groups(s)[c];
-          var members = g.members.filter(function (m) { return live(s, m); }).map(function (m) { return row(s, m, uid); });
+          var members = g.members.filter(function (m) { return live(s, m); }).map(function (m) { return row(s, m, uid, now, true); });
           members.sort(function (x, y) { return y.worth - x.worth; });
           return { code: c, name: g.name, owner: g.owner === uid, members: members };
         })
@@ -107,7 +110,7 @@
         myGroups(s, uid).forEach(function (c) { groups(s)[c].members.forEach(function (m) { set[m] = 1; }); });
         ids = Object.keys(set);
       } else ids = Object.keys(s.users);
-      var rows = ids.filter(function (id) { return live(s, id); }).map(function (id) { return row(s, id, uid); });
+      var rows = ids.filter(function (id) { return live(s, id); }).map(function (id) { return row(s, id, uid, now); });
       var key = kind === 'week' ? 'week' : 'worth';
       rows.sort(function (x, y) { return y[key] - x[key]; });
       var myRank = 0; rows.forEach(function (r, i) { r.rank = i + 1; if (r.me) myRank = i + 1; });

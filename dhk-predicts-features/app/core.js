@@ -253,7 +253,11 @@
   // v4: the site clock moves from Dhaka time to fixed UTC+0 (GTM decision for the diaspora beta).
   // Only a state still on the old Dhaka default is changed; an admin's own choice is kept.
   function migrate4(s) {
-    if (s.site && s.site.utcOffset === 360 && s.site.tz === 'Asia/Dhaka') { s.site.utcOffset = 0; s.site.tz = 'UTC'; }
+    if (s.site && s.site.utcOffset === 360 && s.site.tz === 'Asia/Dhaka') { s.site.utcOffset = 0; s.site.tz = 'UTC';
+      // streak/bonus days were Dhaka dates; any that is now ahead of the UTC day becomes today (no second bonus, streak kept)
+      var today = localDay(Date.now(), 0), U = s.users || {};
+      Object.keys(U).forEach(function (k) { ['lastBonus', 'streakDay'].forEach(function (f) { if (U[k][f] && U[k][f] > today) U[k][f] = today; }); });
+    }
     s.v = 4;
     return s;
   }
