@@ -57,7 +57,8 @@
       overdue: 'সময় পেরিয়েছে', need_review: 'আপত্তি দেখতে হবে', need_approval: 'দ্বিতীয় অ্যাডমিন দরকার', need_settle: 'নিজে থেকেই নিষ্পত্তি হবে', early_confirm: 'আপত্তির সময় শেষ হওয়ার আগেই নিষ্পত্তি করবেন?',
       reset_title: 'খেলোয়াড়ের পাসওয়ার্ড রিসেট', reset_phone: 'খেলোয়াড়ের নম্বর', reset_make: 'কোড বানান', reset_code: 'এই কোডটি খেলোয়াড়কে দিন। একবারই কাজ করবে, {m} মিনিট: {c}',
       reset_note: 'অ্যাডমিন অ্যাকাউন্ট এখান থেকে রিসেট করা যায় না। নতুন কোড বানালে আগের কোড বাতিল হয়।',
-      forgot: 'পাসওয়ার্ড ভুলে গেছেন?', otp_login: 'এসএমএস কোড দিয়ে লগইন', otp_send: 'কোড পাঠান', otp_code: 'কোড', otp_verify: 'লগইন', otp_sent: 'এই নম্বরে অ্যাকাউন্ট থাকলে একটি কোড পাঠানো হয়েছে।', reset_have: 'রিসেট কোড', reset_new: 'নতুন পাসওয়ার্ড', reset_do: 'নতুন পাসওয়ার্ড দিন', back_login: 'লগইনে ফিরুন',
+      forgot: 'পাসওয়ার্ড ভুলে গেছেন?', otp_login: 'এসএমএস কোড দিয়ে লগইন', otp_send: 'কোড পাঠান', otp_code: 'কোড', otp_verify: 'লগইন', otp_sent: 'এই নম্বরে অ্যাকাউন্ট থাকলে একটি কোড পাঠানো হয়েছে।',
+      otp_expiry: 'কোডটি ৫ মিনিট বৈধ।', reset_have: 'রিসেট কোড', reset_new: 'নতুন পাসওয়ার্ড', reset_do: 'নতুন পাসওয়ার্ড দিন', back_login: 'লগইনে ফিরুন',
       sp_title: 'স্পনসর লাইন', sp_en: 'লেখা (ইংরেজি)', sp_bn: 'লেখা (বাংলা)', sp_url: 'লিংক (https://...)', sp_save: 'সংরক্ষণ', sp_tag: 'স্পনসর',
       e_bad_link: 'লিংক https:// দিয়ে শুরু হতে হবে', e_bad_reset: 'কোডটি ভুল বা মেয়াদ শেষ', e_forbidden: 'অনুমতি নেই', e_bad_otp: 'কোড ভুল বা মেয়াদ শেষ', e_otp_unavailable: 'এখন কোড পাঠানো যাচ্ছে না',
       e_admin_reset_denied: 'অ্যাডমিন অ্যাকাউন্ট এখান থেকে রিসেট করা যায় না',
@@ -131,7 +132,8 @@
       overdue: 'Overdue', need_review: 'Needs review', need_approval: 'Needs a second admin', need_settle: 'Settles automatically', early_confirm: 'Settle now, before the dispute window ends?',
       reset_title: 'Reset a player\'s password', reset_phone: 'Player\'s number', reset_make: 'Make code', reset_code: 'Give this code to the player. It works once, for {m} minutes: {c}',
       reset_note: 'Admin accounts cannot be reset here. A new code cancels the previous one.',
-      forgot: 'Forgot your password?', otp_login: 'Log in with an SMS code', otp_send: 'Send code', otp_code: 'Code', otp_verify: 'Log in', otp_sent: 'If that number has an account, a code was sent.', reset_have: 'Reset code', reset_new: 'New password', reset_do: 'Set new password', back_login: 'Back to log in',
+      forgot: 'Forgot your password?', otp_login: 'Log in with an SMS code', otp_send: 'Send code', otp_code: 'Code', otp_verify: 'Log in', otp_sent: 'If that number has an account, a code was sent.',
+      otp_expiry: 'The code is valid for 5 minutes.', reset_have: 'Reset code', reset_new: 'New password', reset_do: 'Set new password', back_login: 'Back to log in',
       sp_title: 'Sponsor line', sp_en: 'Text (English)', sp_bn: 'Text (Bangla)', sp_url: 'Link (https://...)', sp_save: 'Save', sp_tag: 'Sponsored',
       e_bad_link: 'The link must start with https://', e_bad_reset: 'That code is wrong or has expired', e_forbidden: 'Not allowed', e_bad_otp: 'That code is wrong or has expired', e_otp_unavailable: 'Codes cannot be sent right now',
       e_admin_reset_denied: 'Admin accounts cannot be reset here',
@@ -714,7 +716,7 @@
   function otpForm() {
     return '<form class="card" id="otpform"><h2>' + t('otp_login') + '</h2>' +
       '<label for="ophone">' + t('phone') + '<input id="ophone" type="tel" inputmode="tel" autocomplete="tel" value="' + esc(otpPhone) + '" required></label>' +
-      (otpSent ? '<p class="small muted" style="margin:0">' + t('otp_sent') + '</p><label for="ocode">' + t('otp_code') + '<input id="ocode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required></label>' : '') +
+      (otpSent ? '<p class="small muted" style="margin:0">' + t('otp_sent') + ' ' + t('otp_expiry') + '</p><label for="ocode">' + t('otp_code') + '<input id="ocode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required></label>' : '') +
       '<button class="go" type="submit">' + t(otpSent ? 'otp_verify' : 'otp_send') + '</button><button class="ghost" type="button" id="otpback">' + t('back_login') + '</button></form>';
   }
   function resetForm() {
@@ -818,10 +820,11 @@
     if (ev.target.id === 'otpform') {
       ev.preventDefault();
       otpPhone = $('#ophone').value;
-      if (!otpSent) return api('otpsend', { phone: otpPhone }).then(function () { otpSent = true; render(); }, fail);
+      var ob = ev.target.querySelector('.go'); if (ob.disabled) return; ob.disabled = true; // no double submit
+      if (!otpSent) return api('otpsend', { phone: otpPhone }).then(function () { otpSent = true; render(); }, function (e) { ob.disabled = false; fail(e); });
       return api('otpverify', { phone: otpPhone, code: $('#ocode').value }).then(function (r) {
         otpMode = false; otpSent = false; token = r.token; clearCaches(); sset('dp-token', token); location.hash = 'home'; render();
-      }, fail);
+      }, function (e) { ob.disabled = false; fail(e); });
     }
     if (ev.target.id === 'usereset') {
       ev.preventDefault();
