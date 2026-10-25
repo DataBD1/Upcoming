@@ -155,7 +155,8 @@
 
   // Beta seed (A46): day 1 opens Q1, Q2 and Q3 so the first results land within 24-72 hours,
   // plus the longer section A arguments. THRESHOLDS ARE PLACEHOLDERS: whoever opens a market
-  // sets it from the latest published value so it opens near 50%, and every market passes the
+  // sets it from the latest published value so tomorrow's outcome is roughly a coin flip (the market
+  // itself always opens at 50%; see threshold-suggester), and every market passes the
   // A20 checklist before it goes live.
   function betaSeed(now) {
     var tomorrow = localDay(now + DAY + 6 * 3600e3, 0); // at least ~6h of predicting before the close

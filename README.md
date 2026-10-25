@@ -4,7 +4,7 @@ Small standalone tools, one folder each. No dependencies, Node 18+. Run `npm tes
 
 | Folder | What it does |
 |---|---|
-| `threshold-suggester/` | Picks a threshold for an above/below question so it opens between 30% and 70% |
+| `threshold-suggester/` | Picks the threshold that makes tomorrow's outcome closest to a coin flip, from recent day-to-day changes (it says nothing about the percentage a market opens at: daily markets always open at 50%) |
 | `size-budget/` | Fails CI when files grow past a brotli size budget |
 | `i18n-parity/` | Checks two language dictionaries have the same keys and placeholders |
 
