@@ -6,7 +6,7 @@ const EmbeddedPostgres = require('embedded-postgres').default;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'r08pg-')); fs.chmodSync(dir, 0o777);
   const pg = new EmbeddedPostgres({ databaseDir: dir, user: 't', password: 't', port: 54418, persistent: false, onLog: () => {} });
   await pg.initialise(); await pg.start();
-  process.env.PGSTORE_VERIFY = '1'; process.env.POSTGRES_URL = 'postgres://t:t@localhost:54418/postgres'; process.env.ADMIN_PHONES = '01711000000,+12125550123';
+  process.env.TRUST_PROXY = '1'; /* the test fakes client IPs with x-forwarded-for */ process.env.PGSTORE_VERIFY = '1'; process.env.POSTGRES_URL = 'postgres://t:t@localhost:54418/postgres'; process.env.ADMIN_PHONES = '01711000000,+12125550123';
   const fn1 = require('./api/index.js');
   for (const k of Object.keys(require.cache)) if (k.includes(__dirname) && !k.includes('node_modules')) delete require.cache[k];
   const fn2 = require('./api/index.js');
