@@ -1,5 +1,17 @@
 {
-  "files": { "public/index.html": 0.6, "public/app.css": 3, "core.js": 15, "social.js": 3, "public/app.js": 26, "public/share.js": 4.5 },
-  "total": 46,
-  "excludeFromTotal": ["public/share.js"]
+  "quality": 5,
+  "files": {
+    "public/index.html": 0.55,
+    "public/app.css": 2.6,
+    "core.js": 16.75,
+    "public/app.js": 29.55,
+    "public/share.js": 4,
+    "public/sw.js": 0.6,
+    "public/icon.svg": 2.3,
+    "public/manifest.webmanifest": 0.25
+  },
+  "groups": {
+    "critical path": { "files": ["public/index.html", "public/app.css", "public/app.js", "core.js"], "max": 49.4 },
+    "first visit": { "files": ["public/index.html", "public/app.css", "public/app.js", "core.js", "public/share.js", "public/sw.js", "public/icon.svg", "public/manifest.webmanifest"], "max": 56.4 }
+  }
 }
