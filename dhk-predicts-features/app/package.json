@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "test": "node test.js && node test-api.js && node test-disputes.js && node test-resolution.js && node test-security.js && node test-social.js && node test-retention.js && node test-features.js && npm run check",
-    "check": "node ../../i18n-parity/index.js public/app.js \"var T = \" bn en && node ../../size-budget/index.js size-budget.json",
+    "check": "node ../../i18n-parity/index.js public/app.js \"var T = \" bn en --used-in public/app.js --array-marker \"var PRIVACY = \" --array-marker \"var TERMS = \" --codes-in core.js,social.js,lib/handler.js --codes-warn --bangla bn && node ../../size-budget/index.js size-budget.json",
     "test:pg": "node test-pg.js"
   },
   "dependencies": {
