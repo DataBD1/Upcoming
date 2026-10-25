@@ -52,6 +52,7 @@
       help: 'মতামত', fb_title: 'সমস্যা বা মতামত জানান', fb_ph: 'কী হয়েছে, কোন পাতায়?', fb_sent: 'ধন্যবাদ, আমরা পেয়েছি', close: 'বন্ধ',
       new_market: 'নতুন বাজার', q_en: 'প্রশ্ন (ইংরেজি)', q_bn: 'প্রশ্ন (বাংলা)', src_en: 'উৎস (ইংরেজি)', src_bn: 'উৎস (বাংলা)', closes_on: 'শেষ তারিখ', start_p: 'শুরুর সম্ভাবনা %', category: 'বিভাগ', create: 'বাজার খুলুন', created: 'বাজার খোলা হয়েছে', audit: 'অডিট লগ',
       streak_now: 'টানা {n} দিন', streak_best: 'সেরা: {n} দিন', streak_none: 'আজকের ১০০ পয়েন্ট নিলে ধারা শুরু হবে',
+      streak_wait: 'আগামীকাল ফিরে এসে ১০০ পয়েন্ট নিলে ধারা শুরু হবে',
       soon: 'শীঘ্রই শেষ', admin_one: 'মাত্র {n}টি অ্যাডমিন নম্বর দেওয়া আছে। ADMIN_PHONES-এ দ্বিতীয় নম্বর যোগ করুন, না হলে সংশোধন অনুমোদন করা যাবে না।', audit_csv: 'অডিট লগ CSV নামান',
       reset_title: 'খেলোয়াড়ের পাসওয়ার্ড রিসেট', reset_phone: 'খেলোয়াড়ের নম্বর', reset_make: 'কোড বানান', reset_code: 'এই কোডটি খেলোয়াড়কে দিন। একবারই কাজ করবে, {m} মিনিট: {c}',
       forgot: 'পাসওয়ার্ড ভুলে গেছেন?', otp_login: 'এসএমএস কোড দিয়ে লগইন', otp_send: 'কোড পাঠান', otp_code: 'কোড', otp_verify: 'লগইন', otp_sent: 'এই নম্বরে অ্যাকাউন্ট থাকলে একটি কোড পাঠানো হয়েছে।', reset_have: 'রিসেট কোড', reset_new: 'নতুন পাসওয়ার্ড', reset_do: 'নতুন পাসওয়ার্ড দিন', back_login: 'লগইনে ফিরুন',
@@ -120,6 +121,7 @@
       help: 'Help', fb_title: 'Report a problem or send feedback', fb_ph: 'What happened, and on which screen?', fb_sent: 'Thanks, we got it', close: 'Close',
       new_market: 'New market', q_en: 'Question (English)', q_bn: 'Question (Bangla)', src_en: 'Source (English)', src_bn: 'Source (Bangla)', closes_on: 'Closes on', start_p: 'Starting chance %', category: 'Category', create: 'Open market', created: 'Market opened', audit: 'Audit log',
       streak_now: '{n}-day streak', streak_best: 'Best: {n} days', streak_none: 'Take today\'s 100 points to start a streak',
+      streak_wait: 'Come back tomorrow and take your 100 points to start a streak',
       soon: 'Due soon', admin_one: 'Only {n} admin number is set. Add a second one in ADMIN_PHONES, or corrections cannot be approved.', audit_csv: 'Download audit log CSV',
       reset_title: 'Reset a player\'s password', reset_phone: 'Player\'s number', reset_make: 'Make code', reset_code: 'Give this code to the player. It works once, for {m} minutes: {c}',
       forgot: 'Forgot your password?', otp_login: 'Log in with an SMS code', otp_send: 'Send code', otp_code: 'Code', otp_verify: 'Log in', otp_sent: 'If that number has an account, a code was sent.', reset_have: 'Reset code', reset_new: 'New password', reset_do: 'Set new password', back_login: 'Back to log in',
@@ -497,7 +499,7 @@
     if (!LOCAL && !token) { sset('dp-after', 'groups'); return V.login(); }
     return api('social').then(function (d) {
       V._groups = d.groups;
-      var h = '<div class="card"><div class="row"><b>' + (d.streak ? t('streak_now', { n: dig(d.streak) }) : t('streak_none')) + '</b>' + (d.best ? '<span class="small muted">' + t('streak_best', { n: dig(d.best) }) + '</span>' : '') + '</div></div>' +
+      var h = '<div class="card"><div class="row"><b>' + (d.streak ? t('streak_now', { n: dig(d.streak) }) : (d.bonusReady === false ? t('streak_wait') : t('streak_none'))) + '</b>' + (d.best ? '<span class="small muted">' + t('streak_best', { n: dig(d.best) }) + '</span>' : '') + '</div></div>' +
         '<div class="card"><h2>' + t('my_groups') + '</h2><p class="small muted" style="margin:0">' + t('g_intro') + '</p></div>';
       h += d.groups.length ? d.groups.map(function (g) {
         return '<div class="card"><div class="row"><h2>' + esc(g.name) + '</h2><span class="tag">' + esc(g.code) + '</span></div><p class="small muted" style="margin:0">' + t('members', { n: dig(g.members.length) }) + '</p><div class="list">' +
